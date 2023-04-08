@@ -1,0 +1,2679 @@
+#!/bin/bash
+# JWMDesk 2.5
+# JWM desk manager
+# Copyright 2015-2019 GPL3 http://www.gnu.org/licenses
+# Author: Roger D. Grider (radky)
+# Forum: http://www.murga-linux.com/puppy/viewtopic.php?t=101460
+
+export TEXTDOMAIN=jwmdesk
+export OUTPUT_CHARSET=UTF-8
+. gettext.sh
+
+[ ! "`pidof jwm`" ] && Xdialog --title "$(gettext 'Alert')" --beep --msgbox "\n  $(gettext '¡JWMdesk requiere que JWM este activo!')  \n" 0 0 && exit 0
+
+if [ "`which busybox`" ]; then
+ JWMDPID=$(busybox ps | grep -a -- gtkdialog | grep -a -- JWMDESK | awk '{print $1}')
+else
+ JWMDPID=$(ps ax | grep -a -- gtkdialog | grep -a -- JWMDESK | awk '{print $1}')
+fi
+if [ "$JWMDPID" ]; then
+ sleep 1
+ [ "$JWMDPID" ] && Xdialog --title $(gettext 'Alert') --beep --msgbox "\n  $(gettext 'JWMdesk ya está activo! ')  \n" 0 0 && exit 0
+fi
+
+VERSION="2.5"
+WORKDIR="/usr/local/jwmdesk"
+ICONDIR="$WORKDIR/icons"
+PIXMAPSDIR="/usr/share/pixmaps"
+PREFDIR=$WORKDIR/preferences
+TMPDIR=/tmp/"`basename $0`"
+mkdir -p $PREFDIR $TMPDIR
+JWM_VER=$(jwm -v | head -n1 | cut -d " " -f2- | cut -d " " -f1 | sed -e 's/[snvgit-]//g')
+export VERSION WORKDIR ICONDIR PIXMAPSDIR PREFDIR TMPDIR JWM_VER
+
+#define gtkdialog
+if [ "`which gtkdialog4`" ]; then
+ GTKDIALOG=gtkdialog4
+elif [ "`which gtkdialog3`" ]; then
+ GTKDIALOG=gtkdialog3
+else
+ GTKDIALOG=gtkdialog
+fi
+export GTKDIALOG
+
+#define title-bar icon
+ln -sf /usr/local/jwmdesk/icons/jwmdesk64.png /usr/share/icons/hicolor/48x48/apps && gtk-update-icon-cache -f -i /usr/share/icons/hicolor 2>/dev/null
+
+#define frame font
+echo "style \"customframe\"
+{
+  font_name=\"Sans bold 8\"
+}
+widget \"*.GtkFrame.GtkLabel\" style \"customframe\"
+class \"*.GtkFrame.GtkLabel\" style \"customframe\"" > "/tmp/gtkrc_custom"
+
+export GTK2_RC_FILES="/tmp/gtkrc_custom:${HOME}/.gtkrc-2.0"
+
+#define font color
+if [ "`grep -a -- 'Stardust_dark' $HOME/.gtkrc-2.0 2>/dev/null`" ]; then #gold text for Stardust themes
+  COLOR=#D7B740
+else #light-blue text for common dark themes, otherwise medium blue
+  [ "`grep -aEi -- 'black|dark|dusk|night|nox' $HOME/.gtkrc-2.0 2>/dev/null | grep -av -- xfdark`" ] && COLOR=#84aad9 || COLOR=#3272C0
+fi
+export COLOR
+
+#splash dialog
+echo 0 > /tmp/jwmdesk-splash
+export JWMDESK_SPLASH='
+<window title=" " icon-name="jwmdesk64" resizable="false" decorated="true">'"
+<vbox>
+ <pixmap><input file>$ICONDIR/jwmdesk64.png</input><height>48</height><width>48</width></pixmap>
+ <text use-markup=\"true\"><label>\"<b><span size='"'x-large'"'>        JWM</span><span size='"'x-large'"' color='"$COLOR"'>Desk        </span></b>\"</label></text>"'
+ <text><label>Cargando...</label></text>
+ <progressbar visible="false">
+  <input>while [ "$M" != "100" ]; do M=`cat /tmp/jwmdesk-splash`; echo $M; usleep 500000; done</input>
+  <action type="exit">Ready</action>
+ </progressbar>
+</vbox></window>'
+$GTKDIALOG --center -p JWMDESK_SPLASH &
+
+###############################################################################
+#
+# Desktop tab
+#
+###############################################################################
+
+#define background option
+if [ -f /usr/local/apps/Wallpaper2/AppRun ]; then
+ BACKGROUND_EXE="/usr/local/apps/Wallpaper2/AppRun"
+elif [ -f /usr/local/apps/Wallpaper/AppRun ]; then
+ BACKGROUND_EXE="/usr/local/apps/Wallpaper/AppRun"
+elif [ "`which pwallpaper 2>/dev/null`" ]; then
+ BACKGROUND_EXE="pwallpaper"
+elif [ "`which qwallpaper 2>/dev/null`" ]; then
+ BACKGROUND_EXE="qwallpaper"
+else
+ BACKGROUND_EXE='`Xdialog --title Alert --beep --msgbox "\n     $(gettext "¡Opción dewallpaper no disponible!")     \n" 0 0`'
+fi
+
+#define GTK theme option
+if [ "`which gtk_chtheme_wrapper 2>/dev/null`" -a "`which gtk_chtheme 2>/dev/null`" ]; then
+ GTKTHEME_TITLE="$(gettext 'Tema GTK')"
+ GTKTHEME_TEXT="$(gettext 'Apariencia dentro de las ventanas')"
+ GTKTHEME_EXE="gtk_chtheme_wrapper"
+elif [ "`which gtk-chtheme 2>/dev/null`" ]; then
+ GTKTHEME_TITLE="$(gettext 'Tema GTK')"
+ GTKTHEME_TEXT="$(gettext 'Apariencia dentro de las ventanas')"
+ GTKTHEME_EXE="gtk-chtheme"
+elif [ "`which ptheme_gtk 2>/dev/null`" ]; then
+ GTKTHEME_TITLE="$(gettext 'Tema GTK')"
+ GTKTHEME_TEXT="$(gettext 'Apariencia dentro de las ventanas')"
+ GTKTHEME_EXE="ptheme_gtk"
+elif [ "`which ptheme 2>/dev/null`" ]; then
+ GTKTHEME_TITLE="$(gettext 'Tema Global')"
+ GTKTHEME_TEXT="$(gettext 'Establecer apariencia del escritorio')"
+ GTKTHEME_EXE="ptheme"
+else
+ GTKTHEME_TITLE="$(gettext 'Tema GTK')"
+ GTKTHEME_TEXT="$(gettext 'Apariencia dentro de las ventanas')"
+ GTKTHEME_EXE='`Xdialog --title Alert --beep --msgbox "\n     $(gettext "¡La opción de temas GTK no está disponible!")     \n" 0 0`'
+fi
+
+#define icon theme option
+if [ "`which icon_switcher 2>/dev/null`" ]; then
+ ICONSWITCHER_EXE="icon_switcher"
+else
+ ICONSWITCHER_EXE='`Xdialog --title Alert --beep --msgbox "\n     $(gettext "¡El administrador  de iconos no está disponible!")     \n" 0 0`'
+fi
+
+#define drive icon manager option
+if [ "`which eventmanager 2>/dev/null`" ]; then
+ DRIVEICONS_EXE="eventmanager desktop"
+else
+ DRIVEICONS_EXE='`Xdialog --title Alert --beep --msgbox "\n     $(gettext "¡El administrador de iconos de unidad no está disponible!")     \n" 0 0`'
+fi
+
+#define mouse cursor option
+if [ "`which pcur 2>/dev/null`" ]; then
+ CURSOR_EXE="pcur"
+else
+ CURSOR_EXE='`Xdialog --title Alert --beep --msgbox "\n     $(gettext "¡El administrador de cursores no está disponible!")     \n" 0 0`'
+fi
+
+#define screen font option
+if [ "`which fontmanager 2>/dev/null`" ]; then
+ FONT_EXE="fontmanager"
+elif [ "`which fontwizard 2>/dev/null`" ] && [ "`which set-xftdpi 2>/dev/null`" ]; then
+ FONT_EXE="fontwizard & sleep 1 && set-xftdpi"
+elif [ "`which set-xftdpi 2>/dev/null`" ]; then
+ FONT_EXE="set-xftdpi"
+else
+ FONT_EXE='`Xdialog --title Alert --beep --msgbox "\n     $(gettext "¡El administrador de fuentes de no está disponible!")     \n" 0 0`'
+fi
+
+#define screen save option
+if [ -f /usr/local/sscontrol/sscontrol ]; then
+ SCREENSAVE_EXE="/usr/local/sscontrol/sscontrol"
+elif [ "`which pupx 2>/dev/null`" ]; then
+ SCREENSAVE_EXE="pupx"
+else
+ SCREENSAVE_EXE='`Xdialog --title Alert --beep --msgbox "\n     $(gettext "¡La opción ScreenSaver no está disponible!")     \n" 0 0`'
+fi
+
+#define puppy setup option
+if [ "`which wizardwizard 2>/dev/null`" ]; then
+ PUPPYSETUP_EXE="wizardwizard"
+elif [ "`which PupControl 2>/dev/null`" ]; then
+ PUPPYSETUP_EXE="PupControl"
+else
+ PUPPYSETUP_EXE='`Xdialog --title Alert --beep --msgbox "\n     $(gettext "¡El administrador de configuración de Puppy no está disponible!")     \n" 0 0`'
+fi
+
+#define default applications option
+if [ "`which defaults-chooser2 2>/dev/null`" ]; then
+ DEFAULTS_EXE='<action>defaults-chooser2 &</action>'
+elif [ "`which puppyapps 2>/dev/null`" ]; then
+ DEFAULTS_EXE='      <action>cp -f "`which puppyapps`" /tmp/puppyappz</action>
+      <action>sed -i "s/^.*HEIGHT-.*$/		HEIGHT=\$\(\(HEIGHT-125\)\)/" /tmp/puppyappz</action>
+      <action>/tmp/puppyappz &</action>'
+elif [ "`which defaults-chooser 2>/dev/null`" ]; then
+ DEFAULTS_EXE='<action>defaults-chooser &</action>'
+fi
+
+#define menu manager option
+if [ -f /usr/local/PupMenu/PM-edit ]; then
+ MENUMANAGER_EXE='      <action>echo ""Marker for PupMenuEdit"" > /tmp/pcpPMedit-marker</action>
+      <action>echo > /tmp/TREE1.tmp</action>
+      <action>/usr/local/PupMenu/func -pm_edit &</action>'
+elif [ "`which menumanager 2>/dev/null`" ]; then
+ MENUMANAGER_EXE='<action>menumanager &</action>'
+else
+ MENUMANAGER_EXE='<action>'$WORKDIR'/menumanager &</action>'
+fi
+
+###############################################################################
+#
+# Menu tab
+#
+###############################################################################
+
+#define menu height
+MHT=$(grep -a "RootMenu label" /etc/xdg/templates/_root_.jwmrc | grep -a MENHEIGHT 2>/dev/null)
+[ "$MHT" = "" ] && MHT=$(grep -a "MH=" /usr/sbin/fixmenus 2>/dev/null)
+if [ "$MHT" ]; then
+ JWM_MENUHEIGHT=''
+ NEWMENHEIGHT=''
+ jwm_menuheight () {
+ if [ "$NEWMENHEIGHT" != "$MENHEIGHT" ]; then
+   if [ "$NEWMENHEIGHT" = 16 ]; then
+     [ -f $HOME/.jwm/menuheights ] && rm -f $HOME/.jwm/menuheights
+   else
+     echo "MENHEIGHT=$NEWMENHEIGHT" > $HOME/.jwm/menuheights
+   fi
+ fi
+ if [ "`which gtkdialog-splash 2>/dev/null`" ]; then
+   gtkdialog-splash -close never -placement top -fontsize large -bg goldenrod -text " $(gettext 'Actualizando el menú, espere...') " &
+ else
+   Xdialog --title "" --no-buttons --infobox "\n     $(gettext 'Actualizando el menú, espere...')     \n" 0 0 60000 &
+ fi
+ XPID=$!
+ if [ "`grep -a "MH=" /usr/sbin/fixmenus 2>/dev/null`" ]; then
+  if [ -d /usr/local/jwm_config* ]; then
+   sed -i "/<RootMenu label=/ s%height=".*" %height=""\"$NEWMENHEIGHT\""" %" /etc/xdg/templates/_root_.jwmrc
+  else
+   sed -i "s/^.*<RootMenu label=.*$/<RootMenu label=\"Menu\" labeled=\"false\" height=\"$NEWMENHEIGHT\" onroot=\"3\">/" /etc/xdg/templates/_root_.jwmrc
+  fi
+  [ "`grep -a "MH=24" /usr/sbin/fixmenus 2>/dev/null`" ] && sed -i 's/MH=24/MH=16/' /usr/sbin/fixmenus
+ fi
+ $WORKDIR/fixmenus
+ jwm -reload || jwm -restart
+ kill $XPID 2>/dev/null
+ }
+ export -f jwm_menuheight
+ [ -f $HOME/.jwm/menuheights ] && MENHEIGHT=$(cat $HOME/.jwm/menuheights | cut -d '=' -f2 | sed 's/\"//g')
+ [ ! "$MENHEIGHT" ] && MENHEIGHT="16"
+ JWM_MENUHEIGHT=' <text space-expand="false" space-fill="false" use-markup="true"><label>"<b><big>'$(gettext 'Altura del menú')'</big></b>"</label></text>
+ <hbox space-expand="false" space-fill="false" homogeneous="true">
+ <vbox>
+  <text><label>'$(gettext 'Tamaño del Item')'</label></text>
+  <comboboxtext width-request="121" tooltip-text=" '$(gettext 'Altura de los elementos del menú en píxeles.')' ">
+   <variable>NEWMENHEIGHT</variable>
+   <default>'`echo $MENHEIGHT`'</default>
+   <item>16</item>
+   <item>24</item>
+   <item>32</item>
+   <item>40</item>
+   <item>48</item>
+   <action>jwm_menuheight && exit</action>
+  </comboboxtext>
+ </vbox>
+ </hbox>
+ <text space-expand="true" space-fill="true" height-request="35"><label>""</label></text>'
+fi
+
+#define menu button
+MENUBUTTON=""
+[ -f /tmp/menubutton.png ] && rm -f /tmp/menubutton.png
+MB=`ls $WORKDIR/jwm_menubutton_icons | grep -vw hide | sort -u`
+MB_ITEMS="<item>"$i"</item>"
+SAVEIFS=$IFS
+IFS=$(echo -en "\n\b") #support filenames with spaces
+for i in $MB
+ do
+  ln -sf $WORKDIR/jwm_menubutton_icons/"$i" $PIXMAPSDIR
+  MB_ITEMS=`echo "$MB_ITEMS<item>"$i"</item>"`
+ done
+IFS=$SAVEIFS
+MB_ITEMS=`echo -e "$MB_ITEMS\n<item>ocultar</item>" | sed 's/<item><\/item>//'`
+
+[ -d /usr/local/jwm_config* ] && mbtray="$HOME/.jwm/jwmrc-tray1" || mbtray="$HOME/.jwmrc-tray"
+export mbtray
+
+MENU_LABEL=$(grep -aFi -- '<TrayButton label=' $mbtray | grep -a "root:[39]" | grep -a -om1 -- " label=.* " | cut -d'"' -f2)
+[ "$MENU_LABEL" = "" ] && MENU_LABEL="ocultar"
+MENU_ICON=$(grep -aFi -- '<TrayButton label=' $mbtray | grep -a "root:[39]" | grep -a -om1 -- " icon=.* " | cut -d'"' -f2)
+[ "$MENU_ICON" = "" ] || [ ! -f $PIXMAPSDIR/"$MENU_ICON" ] && MENU_ICON="ocultar"
+if [ "$MENU_ICON" = "ocultar" ]; then
+ cp -f $WORKDIR/jwm_menubutton_icons/hide /tmp/tmp; mv -f /tmp/tmp /tmp/menubutton.png
+else
+ cp -f $PIXMAPSDIR/"$MENU_ICON" /tmp/tmp; mv -f /tmp/tmp /tmp/menubutton.png
+fi
+. /etc/DISTRO_SPECS
+
+MENUBUTTON='   <text space-expand="false" space-fill="false" use-markup="true"><label>"<b><big>'$(gettext 'Botón del menú')'</big></b>"</label></text>
+   <hbox space-expand="false" space-fill="false" homogeneous="true">
+   <hbox space-expand="false" space-fill="false" width-request="382">
+   <vbox>
+   <text><label>'$(gettext 'Icono')'</label></text>
+    <comboboxentry wrap-width="2" width-request="171">
+     <variable>MENU_ICON</variable>
+     <default>'`echo $MENU_ICON`'</default>
+      <action signal="changed">menu_button_view</action>
+      <action signal="changed">refresh:MBVIEWER</action>
+     '$MB_ITEMS'
+    </comboboxentry>
+   </vbox>
+   <vbox>
+   <hbox height-request="16" width-request="24">
+    <pixmap><input file>'$ICONDIR/blank1.png'</input></pixmap>
+   </hbox>
+   <hbox height-request="24" width-request="24">
+    <pixmap>
+     <variable>MBVIEWER</variable>
+     <input file>/tmp/menubutton.png</input>
+     <height>24</height><width>24</width>
+    </pixmap>
+   </hbox>
+   </vbox>
+   <vbox>
+   <text><label>'$(gettext 'Etiqueta')'</label></text>
+    <comboboxentry wrap-width="1" width-request="171">
+     <variable>MENU_LABEL</variable>
+     <default>'`echo $MENU_LABEL`'</default>
+     <item>Apps</item>
+     <item>Aplicaciones</item>
+     <item>Menu</item>
+     <item>Inicio</item>
+     <item>'$DISTRO_FILE_PREFIX'</item>
+     <item>ocultar</item>
+    </comboboxentry>
+   </vbox>
+   </hbox>
+   </hbox>
+    <pixmap><input file>'$ICONDIR/blank1.png'</input></pixmap>
+   <hbox space-expand="false" space-fill="false" homogeneous="true">
+    <button width-request="121" tooltip-text=" '$(gettext 'Aplicar el icono y la etiqueta seleccionados')' ">
+     <label>'$(gettext 'Aplicar')' </label>
+     <input file>'$ICONDIR'/apply.svg</input><height>20</height><width>20</width>
+     <action>menu_button_make</action>
+     <action>jwm -restart</action>
+    </button>
+   </hbox>'
+
+menu_button_make()
+{
+ [ "$MENU_LABEL" = "ocultar" ] && MENU_LABEL=""
+ [ "$MENU_ICON" = "" ] && MENU_ICON="ocultar"
+ [ -d /usr/local/jwm_config* ] && SPACE="" ROOT="root:9" || SPACE="		" ROOT="root:3"
+ if [ "$MENU_ICON" = "ocultar" ]; then
+  sed -i "s/^.*"$ROOT".*$/""$SPACE""<TrayButton label=\"Menu\" border=\"true\">"$ROOT"<\/TrayButton>/" $mbtray
+  sed -i "/"$ROOT"/ s%label=".*" border%label=""\"$MENU_LABEL\""" border%" $mbtray
+ else
+  sed -i "s/^.*"$ROOT".*$/""$SPACE""<TrayButton label=\"Menu\" icon=\"puppy.svg\" border=\"true\">"$ROOT"<\/TrayButton>/" $mbtray
+  sed -i "/"$ROOT"/ s%icon=".*" border%icon=""\"$MENU_ICON\""" border%" $mbtray
+  sed -i "/"$ROOT"/ s%label=".*" icon%label=""\"$MENU_LABEL\""" icon%" $mbtray
+ fi
+ rm -f /tmp/menubutton.png 2>/dev/null
+}
+export -f menu_button_make
+
+menu_button_view()
+{
+ cp -f $WORKDIR/jwm_menubutton_icons/"$MENU_ICON" /tmp; mv -f /tmp/"$MENU_ICON" /tmp/menubutton.png
+}
+export -f menu_button_view
+
+MENU='
+  <vbox space-expand="true" space-fill="true" margin="5">
+   <text height-request="10"><label>""</label></text>
+  '$JWM_MENUHEIGHT'
+  '$MENUBUTTON'
+   <text space-expand="true" space-fill="true" height-request="35"><label>""</label></text>
+   <text space-expand="false" space-fill="false" use-markup="true"><label>"<b><big>'$(gettext 'Administrador del menu')'</big></b>"</label></text>
+   <hbox space-expand="false" space-fill="false" homogeneous="true">
+    <button height-request="102" width-request="154" image-position="2" tooltip-text=" '$(gettext 'Administrar aplicaciones en el menú del sistema.')' ">
+     <label>'$(gettext 'Editar item')' </label>
+     <input file>'$ICONDIR'/menu.svg</input><height>56</height><width>56</width>
+     '$MENUMANAGER_EXE'
+    </button>
+   </hbox>
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+   <pixmap space-expand="true" space-fill="true"><input file>'$ICONDIR'/blank1.png</input></pixmap>
+  </vbox>'
+
+###############################################################################
+#
+# Window tab
+#
+###############################################################################
+
+#backup jwmrc-personal
+[ ! -f $HOME/.jwm/jwmrc-personal-bak ] && cp $HOME/.jwm/jwmrc-personal $HOME/.jwm/jwmrc-personal-bak
+
+#define window geometry
+window_geometry()
+{
+WINDOW_GEOMETRY=$(cat $PREFDIR/window_geometry 2>/dev/null)
+[ ! "$WINDOW_GEOMETRY" ] && WINDOW_GEOMETRY='false'
+if [ "$WINDOW_GEOMETRY" = "true" ]; then
+ window_current
+ sed -i -e "s/^.*<Height>.*$/  <Height>$TITLEBAR_HEIGHT<\/Height>/" $HOME/.jwm/jwmrc-personal
+ sed -i -e "s/^.*<Width>.*$/  <Width>$WINDOWBORDER_WIDTH<\/Width>/" $HOME/.jwm/jwmrc-personal
+ sed -i -e "s/^.*<Corner>.*$/  <Corner>$WINDOWCORNER_RADIUS<\/Corner>/" $HOME/.jwm/jwmrc-personal
+else
+ sed -i -e '/<Height>/d' -e '/<Width>/d' -e '/<Corner>/d' $HOME/.jwm/jwmrc-personal
+fi
+}
+export -f window_geometry
+
+#define initial sensitive state of window geometry widgets
+WINDOW_GEOMETRY=$(cat $PREFDIR/window_geometry 2>/dev/null)
+[ ! "$WINDOW_GEOMETRY" ] && WINDOW_GEOMETRY='false'
+GSTATE="false"
+[ "$WINDOW_GEOMETRY" = "true" ] && GSTATE="true"
+
+#define opening size of jwmdesk window
+WINDOW_WIDTH=$(cat $PREFDIR/window_width 2>/dev/null)
+[ ! "$WINDOW_WIDTH" ] && WINDOW_WIDTH="500"
+WINDOW_HEIGHT=`expr $WINDOW_WIDTH + 82`
+
+#define window corner radius
+CORNER_RADIUS=''
+if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then
+ if ((`bc <<< "$JWM_VER>=1215"`)); then
+   CORNER_RADIUS='<hbox>
+    <text><label>'$(gettext 'Radio de las esquinas')': </label></text>
+    <spinbutton sensitive="'$GSTATE'" editable="false" width-request="121" range-min="0" range-max="5" range-step="1" range-value="3" tooltip-text=" '$(gettext 'Rango:0-5px  Predeterminado:3px 
+ Nota: 0 = Esquinas cuadradas')' ">
+      <variable>WINDOWCORNER_RADIUS</variable>
+      <input>cat '$TMPDIR'/windowcorner_radius</input>
+    </spinbutton>
+   </hbox>'
+ else
+  sed -i -e '/<Corner>/d' $HOME/.jwm/jwmrc-personal
+ fi
+else
+ if [ "`echo "$JWM_VER" | grep -aE '^2\.3\.[2-9]|^2\.[4-9]|^[3-9]' 2>/dev/null`" ]; then
+   CORNER_RADIUS='<hbox>
+    <text><label>'$(gettext 'Radio de las esquinas')': </label></text>
+    <spinbutton sensitive="'$GSTATE'" editable="false" width-request="121" range-min="0" range-max="5" range-step="1" range-value="3" tooltip-text=" '$(gettext 'Rango:0-5px  Predeterminado:3px 
+ Nota: 0 = Esquinas cuadradas')' ">
+      <variable>WINDOWCORNER_RADIUS</variable>
+      <input>cat '$TMPDIR'/windowcorner_radius</input>
+    </spinbutton>
+   </hbox>'
+ else
+  sed -i -e '/<Corner>/d' $HOME/.jwm/jwmrc-personal
+ fi
+fi
+
+#define window themes
+MOTIF="" MOTIF_STYLE=""
+if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then
+ if ((`bc <<< "$JWM_VER>=1126"`)); then
+   MOTIF=$(cat $PREFDIR/motif_style 2>/dev/null)
+   [ ! "$MOTIF" ] && MOTIF='false' && echo "false" > $PREFDIR/motif_style
+   MOTIF_STYLE='<checkbox tooltip-text=" '$(gettext 'Habilita la modificación de estilos de la ventana
+  o desactive el tema plano predeterminado.')' ">
+      <label>'$(gettext 'Motificar estilo')'</label>
+      <variable>MOTIF</variable>
+      <default>'`echo $MOTIF`'</default>
+      <action>if true echo true > '$PREFDIR'/motif_style</action>
+      <action>if false echo false > '$PREFDIR'/motif_style</action>
+    </checkbox>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>'
+ fi
+else
+ if [ "`echo "$JWM_VER" | grep -aE '^2\.3\.[1-9]|^2\.[4-9]|^[3-9]' 2>/dev/null`" ]; then
+   MOTIF=$(cat $PREFDIR/motif_style 2>/dev/null)
+   [ ! "$MOTIF" ] && MOTIF='false' && echo "false" > $PREFDIR/motif_style
+   MOTIF_STYLE='<checkbox tooltip-text=" '$(gettext 'Habilita la modificación de estilos de la ventana
+  o desactive el tema plano predeterminado.')' ">
+      <label>'$(gettext 'Motificar estilo')'</label>
+      <variable>MOTIF</variable>
+      <default>'`echo $MOTIF`'</default>
+      <action>if true echo true > '$PREFDIR'/motif_style</action>
+      <action>if false echo false > '$PREFDIR'/motif_style</action>
+    </checkbox>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>'
+ fi
+fi
+WINDOWTHEME='
+   <vbox space-expand="true" space-fill="true">
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Tema')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+   <hbox space-expand="false" space-fill="false">
+    '$MOTIF_STYLE'
+   <hbox space-expand="false" space-fill="false">
+    <text><label>'$(gettext 'Bordes')' • '$(gettext 'Botones')':</label></text>
+    <button image-position="0" width-request="58" tooltip-text=" '$(gettext 'Seleccione el tema de JWM para los bordes de las ventanas')' ">
+     <input file>'$ICONDIR'/windows2.svg</input><height>18</height><width>18</width>
+     <action>'$WORKDIR'/theme_switcher &</action>
+    </button>
+   </hbox>
+   <hbox space-expand="false" space-fill="false">
+    <button image-position="0" width-request="58" tooltip-text=" '$(gettext 'Seleccione el tema de JWM para los botones de la barra de título')' ">
+     <input file>'$ICONDIR'/close.svg</input><height>18</height><width>18</width>
+     <action>'$WORKDIR'/window_buttons &</action>
+    </button>
+   </hbox>
+   </hbox>
+   </vbox>'
+if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then
+ if ((`bc <<< "$JWM_VER<=847"`)); then
+  WINDOWTHEME='
+   <vbox space-expand="true" space-fill="true">
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Tema')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+   <hbox>
+   <hbox space-expand="false" space-fill="false">
+    <text><label>'$(gettext 'Bordes')':</label></text>
+    <button image-position="0" width-request="121" tooltip-text=" '$(gettext 'Seleccione el tema de JWM para los bordes de las ventanas')' ">
+     <input file>'$ICONDIR'/windows2.svg</input><height>18</height><width>18</width>
+     <action>'$WORKDIR'/theme_switcher &</action>
+    </button>
+   </hbox>
+   </hbox>
+   </vbox>'
+ fi
+elif [ "`echo "$JWM_VER" | grep -aE '^1|^2\.[0-1]' 2>/dev/null`" ]; then
+  WINDOWTHEME='
+   <vbox space-expand="true" space-fill="true">
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Tema')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+   <hbox>
+   <hbox space-expand="false" space-fill="false">
+    <text><label>'$(gettext 'Bordes')':</label></text>
+    <button image-position="0" width-request="121" tooltip-text=" '$(gettext 'Seleccione el tema de JWM para los botones de la barra de título')' ">
+     <input file>'$ICONDIR'/windows2.svg</input><height>18</height><width>18</width>
+     <action>'$WORKDIR'/theme_switcher &</action>
+    </button>
+   </hbox>
+   </hbox>
+   </vbox>'
+fi
+
+#define click-title and sloppy-title window focus options
+FOCUS_TITLE_TOOLTIP="" FOCUS_TITLE_ITEMS=""
+if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then
+ if ((`bc <<< "$JWM_VER>=1580"`)); then
+  FOCUS_TITLE_TOOLTIP="
+ --
+ "$(gettext 'Click-Title and Sloppy-Title: Como arriba, pero aumenta
+  la ventana haciendo clic en la barra de título o en los bordes de la ventana.')""
+  FOCUS_TITLE_ITEMS="<item>clicktitle</item>
+<item>sloppytitle</item>"
+ fi
+else
+ if [ "`echo "$JWM_VER" | grep -aE '^2\.3\.[7-9]|^2\.[4-9]|^[3-9]' 2>/dev/null`" ]; then
+  FOCUS_TITLE_TOOLTIP="
+ --
+ "$(gettext 'Click-Title y Sloppy-Title: Como arriba, pero aumenta
+  la ventana haciendo clic en la barra de título o en los bordes de la ventana.')""
+  FOCUS_TITLE_ITEMS="<item>clicktitle</item>
+<item>sloppytitle</item>"
+ fi
+fi
+
+#define new window settings
+window_new()
+{
+WINDOW_GEOMETRY=$(cat $PREFDIR/window_geometry 2>/dev/null)
+[ ! "$WINDOW_GEOMETRY" ] && WINDOW_GEOMETRY='false'
+if [ "$WINDOW_GEOMETRY" = "true" ]; then
+ [ ! "$TITLEBAR_HEIGHT" ] && TITLEBAR_HEIGHT="22"
+ sed -i -e "s/^.*<Height>.*$/  <Height>$TITLEBAR_HEIGHT<\/Height>/" $HOME/.jwm/jwmrc-personal
+ [ ! "$WINDOWBORDER_WIDTH" ] && WINDOWBORDER_WIDTH="4"
+ sed -i -e "s/^.*<Width>.*$/  <Width>$WINDOWBORDER_WIDTH<\/Width>/" $HOME/.jwm/jwmrc-personal
+ [ ! "$WINDOWCORNER_RADIUS" ] && WINDOWCORNER_RADIUS="3"
+ sed -i -e "s/^.*<Corner>.*$/  <Corner>$WINDOWCORNER_RADIUS<\/Corner>/" $HOME/.jwm/jwmrc-personal
+fi
+if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then
+ if ((`bc <<< "$JWM_VER>=1126"`)); then
+  if [ "$MOTIF" = "true" ]; then
+   sed -i -e "s/^.*<WindowStyle.*$/<WindowStyle decorations=\"motif\">/" $HOME/.jwm/jwmrc-personal
+  else
+   sed -i -e "s/^.*<WindowStyle.*$/<WindowStyle>/" $HOME/.jwm/jwmrc-personal
+  fi
+ fi
+else
+ if [ "`echo "$JWM_VER" | grep -aE '^2\.3\.[1-9]|^2\.[4-9]|^[3-9]' 2>/dev/null`" ]; then
+  if [ "$MOTIF" = "true" ]; then
+   sed -i -e "s/^.*<WindowStyle.*$/<WindowStyle decorations=\"motif\">/" $HOME/.jwm/jwmrc-personal
+  else
+   sed -i -e "s/^.*<WindowStyle.*$/<WindowStyle>/" $HOME/.jwm/jwmrc-personal
+  fi
+ fi
+fi
+[ ! "$FOCUS_MODEL" ] && FOCUS_MODEL="click"
+sed -i -e "s/^.*<FocusModel.*$/<FocusModel>$FOCUS_MODEL<\/FocusModel>/" $HOME/.jwm/jwmrc-personal
+[ ! "$SNAP_MODE" ] && SNAP_MODE="none"
+[ ! "$SNAP_DISTANCE" ] && SNAP_DISTANCE="5"
+sed -i -e "s/^.*<SnapMode.*$/<SnapMode distance=\"$SNAP_DISTANCE\">$SNAP_MODE<\/SnapMode>/" $HOME/.jwm/jwmrc-personal
+if [ "$AEROSNAP" = "true" ]; then
+  [ ! "`grep -a 'aerosnap<' /etc/xdg/templates/_root_.jwmrc 2>/dev/null`" ] && sed -i '0,/<Group>/ s/<Group>/<Group><Option>aerosnap<\/Option><\/Group>\n<Group>/' /etc/xdg/templates/_root_.jwmrc
+  [ ! "`grep -a 'aerosnap<' $HOME/.jwmrc 2>/dev/null`" ] && sed -i '0,/<Group>/ s/<Group>/<Group><Option>aerosnap<\/Option><\/Group>\n<Group>/' $HOME/.jwmrc
+else
+ [ "`grep -a 'aerosnap<' /etc/xdg/templates/_root_.jwmrc 2>/dev/null`" ] && sed -i '/aerosnap</d' /etc/xdg/templates/_root_.jwmrc
+ [ "`grep -a 'aerosnap<' $HOME/.jwmrc 2>/dev/null`" ] && sed -i '/aerosnap</d' $HOME/.jwmrc
+fi
+[ ! "$MOVE_MODE" ] && MOVE_MODE="opaque"
+[ ! "$MOVE_MODE_COORDINATES" ] && MOVE_MODE_COORDINATES="off"
+[ ! "$MOVE_MODE_DELAY" ] && MOVE_MODE_DELAY="700"
+sed -i -e "s/^.*<MoveMode.*$/<MoveMode coordinates=\"$MOVE_MODE_COORDINATES\" delay=\"$MOVE_MODE_DELAY\">$MOVE_MODE<\/MoveMode>/" $HOME/.jwm/jwmrc-personal
+[ ! "$RESIZE_MODE" ] && RESIZE_MODE="opaco"
+[ ! "$RESIZE_MODE_COORDINATES" ] && RESIZE_MODE_COORDINATES="off"
+sed -i -e "s/^.*<ResizeMode.*$/<ResizeMode coordinates=\"$RESIZE_MODE_COORDINATES\" >$RESIZE_MODE<\/ResizeMode>/" $HOME/.jwm/jwmrc-personal
+rm $HOME/.jwm/jwmrc-personal-old
+mv $HOME/.jwm/jwmrc-personal $HOME/.jwm/jwmrc-personal-old
+sed -e 's/ninguno/none/g' -e 's/ninguna/off/g' -e 's/pantalla/screen/g' -e 's/borde/border/g' -e 's/ventana/window/g' -e 's/esquina/corner/g' -e 's/contorno/outline/g'  -e 's/opaco/opaque/g' $HOME/.jwm/jwmrc-personal-old > $HOME/.jwm/jwmrc-personal
+}
+export -f window_new
+
+#define current window settings
+window_current()
+{
+if [ ! "`grep -a '<WindowStyle' $HOME/.jwm/jwmrc-personal`" ]; then
+ sed -i -e '/<ResizeMode/a \\n<WindowStyle>\n<\/WindowStyle>' $HOME/.jwm/jwmrc-personal
+fi
+WINDOW_GEOMETRY=$(cat $PREFDIR/window_geometry 2>/dev/null)
+[ ! "$WINDOW_GEOMETRY" ] && WINDOW_GEOMETRY='false'
+if [ "$WINDOW_GEOMETRY" = "true" ]; then
+ if [ ! "`tail -n2 /etc/xdg/templates/_root_.jwmrc | grep -aF '<Include>/root/.jwm/jwmrc-personal'`" ]; then
+  sed -i -e '/<Include>\/root\/.jwm\/jwmrc-personal/d' /etc/xdg/templates/_root_.jwmrc
+  grep -av '</JWM>' /etc/xdg/templates/_root_.jwmrc > /tmp/tmp
+  sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' /tmp/tmp #delete all trailing blank lines at end of file
+  echo -e "<Include>/root/.jwm/jwmrc-personal</Include>\n</JWM>" >> /tmp/tmp
+  mv -f /tmp/tmp /etc/xdg/templates/_root_.jwmrc
+ fi
+ if [ ! "`grep -a '<WindowStyle' $HOME/.jwm/jwmrc-personal`" ]; then
+  sed -i -e '/<ResizeMode/a \\n<WindowStyle>\n  <Height>22<\/Height>\n  <Width>4<\/Width>\n  <Corner>3<\/Corner>\n<\/WindowStyle>' $HOME/.jwm/jwmrc-personal
+ fi
+ if [ ! "`grep -a '<Height>' $HOME/.jwm/jwmrc-personal`" ]; then
+  sed -i -e '/<WindowStyle/a \  <Height>22<\/Height>' $HOME/.jwm/jwmrc-personal
+ fi
+ if [ ! "`grep -a '<Width>' $HOME/.jwm/jwmrc-personal`" ]; then
+  sed -i -e '/<Height>/a \  <Width>4<\/Width>' $HOME/.jwm/jwmrc-personal
+ fi
+ if [ ! "`grep -a '<Corner>' $HOME/.jwm/jwmrc-personal`" ]; then
+  sed -i -e '/<Width>/a \  <Corner>3<\/Corner>' $HOME/.jwm/jwmrc-personal
+ fi
+ if [ ! "`grep -a '</WindowStyle' $HOME/.jwm/jwmrc-personal`" ]; then
+  sed -i -e '/<Corner>/a \<\/WindowStyle>' $HOME/.jwm/jwmrc-personal
+ fi
+fi
+if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then
+ if ((`bc <<< "$JWM_VER<1215"`)); then
+  sed -i -e '/<Corner>/d' $HOME/.jwm/jwmrc-personal
+ fi
+else
+ if [ "`echo "$JWM_VER" | grep -aE '^1|^2\.[0-2]|^2\.3\.[0-1]' 2>/dev/null`" ]; then
+  sed -i -e '/<Corner>/d' $HOME/.jwm/jwmrc-personal
+ fi
+fi
+}
+export -f window_current
+window_current
+
+TITLEBAR_HEIGHT="`grep -a '<Height>' $HOME/.jwm/jwmrc-personal | cut -f2 -d '>' | cut -f1 -d '<' | tr -cd [0-9]`"
+[ ! "$TITLEBAR_HEIGHT" ] && TITLEBAR_HEIGHT="22"
+echo "$TITLEBAR_HEIGHT" > $TMPDIR/titlebar_height
+WINDOWBORDER_WIDTH="`grep -a '<Width>' $HOME/.jwm/jwmrc-personal | cut -f2 -d '>' | cut -f1 -d '<' | tr -cd [0-9]`"
+[ ! "$WINDOWBORDER_WIDTH" ] && WINDOWBORDER_WIDTH="4"
+echo "$WINDOWBORDER_WIDTH" > $TMPDIR/windowborder_width
+WINDOWCORNER_RADIUS="`grep -a '<Corner>' $HOME/.jwm/jwmrc-personal | cut -f2 -d '>' | cut -f1 -d '<' | tr -cd [0-9]`"
+[ ! "$WINDOWCORNER_RADIUS" ] && WINDOWCORNER_RADIUS="3"
+echo "$WINDOWCORNER_RADIUS" > $TMPDIR/windowcorner_radius
+FOCUS_MODEL="`grep -a '<FocusModel.*>' $HOME/.jwm/jwmrc-personal | cut -f2 -d '>' | cut -f1 -d '<'`"
+[ ! "$FOCUS_MODEL" ] && FOCUS_MODEL="click"
+rm /tmp/jwmdesk/snap
+echo `grep -a '<SnapMode.*>' $HOME/.jwm/jwmrc-personal | cut -f2 -d '>' | cut -f1 -d '<'` >> /tmp/jwmdesk/snap
+SNAP_MODE="`sed -e 's/none/ninguno/g' -e 's/screen/pantalla/g' -e 's/border/borde/g' /tmp/jwmdesk/snap`"
+[ ! "$SNAP_MODE" ] && SNAP_MODE="none"
+SNAP_DISTANCE="`grep -a '<SnapMode.*>' $HOME/.jwm/jwmrc-personal | cut -f2- -d '"' | cut -f1 -d '"'`"
+[ ! "$SNAP_DISTANCE" ] && SNAP_DISTANCE="5"
+rm /tmp/jwmdesk/move
+echo `grep -a '<MoveMode.*>' $HOME/.jwm/jwmrc-personal | cut -f2 -d '>' | cut -f1 -d '<'` >> /tmp/jwmdesk/move
+MOVE_MODE="`sed  -e 's/outline/contorno/g'  -e 's/opaque/opaco/g' /tmp/jwmdesk/move`"
+[ ! "$MOVE_MODE" ] && MOVE_MODE="opaque"
+rm rm /tmp/jwmdesk/mc
+echo `grep -a '<MoveMode.*>' $HOME/.jwm/jwmrc-personal | awk '{print $2}' | cut -f2- -d '"' | cut -f1 -d '"'` >> /tmp/jwmdesk/mc
+MOVE_MODE_COORDINATES="`sed -e 's/off/ninguna/g' -e 's/screen/pantalla/g' -e 's/window/ventana/g' -e 's/corner/esquina/g' /tmp/jwmdesk/mc`"
+[ ! "$MOVE_MODE_COORDINATES" ] && MOVE_MODE_COORDINATES="off"
+MOVE_MODE_DELAY="`grep -a '<MoveMode.*>' $HOME/.jwm/jwmrc-personal | awk '{print $3}' | cut -f2- -d '"' | cut -f1 -d '"'`"
+[ ! "$MOVE_MODE_DELAY" ] && MOVE_MODE_DELAY="700"
+rm /tmp/jwmdesk/re
+echo `grep -a '<ResizeMode.*>' $HOME/.jwm/jwmrc-personal | cut -f2 -d '>' | cut -f1 -d '<'` >> /tmp/jwmdesk/re
+RESIZE_MODE="`sed  -e 's/outline/contorno/g'  -e 's/opaque/opaco/g' /tmp/jwmdesk/re`"
+[ ! "$RESIZE_MODE" ] && RESIZE_MODE="opaque"
+rm /tmp/jwmdesk/rc
+echo `grep -a '<ResizeMode.*>' $HOME/.jwm/jwmrc-personal | awk '{print $2}' | cut -f2- -d '"' | cut -f1 -d '"'` >> /tmp/jwmdesk/rc
+RESIZE_MODE_COORDINATES="`sed -e 's/off/ninguna/g' -e 's/screen/pantalla/g' -e 's/window/ventana/g' -e 's/corner/esquina/g' /tmp/jwmdesk/rc`"
+[ ! "$RESIZE_MODE_COORDINATES" ] && RESIZE_MODE_COORDINATES="off"
+if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then
+ if ((`bc <<< "$JWM_VER>=1464"`)); then
+ AEROSNAP="`grep -a 'aerosnap<.*>' /etc/xdg/templates/_root_.jwmrc 2>/dev/null`"
+ [ "$AEROSNAP" ] && AEROSNAP="true" || AEROSNAP="false"
+  AERO_SNAP='
+   <hbox>
+    <checkbox tooltip-text=" '$(gettext 'Maximiza automáticamente la ventana
+  cuando el cursor toca el borde de la pantalla.')' ">
+      <label>'$(gettext 'Aero Snap')'  |</label>
+      <variable>AEROSNAP</variable>
+      <default>'`echo $AEROSNAP`'</default>
+    </checkbox>
+    <text><label>'$(gettext 'Retraso')':</label></text>
+    <spinbutton editable="false" width-request="121" range-min="500" range-max="2000" range-step="10" range-value="700" tooltip-text=" '$(gettext 'Retraso de transición en el borde de la pantalla antes de la ventana se
+  se mueva al siguiente escritorio.  (Predeterminado:700 ms)')' ">
+      <variable>MOVE_MODE_DELAY</variable>
+      <input>echo '$MOVE_MODE_DELAY'</input>
+    </spinbutton>
+   </hbox>'
+ fi
+else
+ if [ "`echo "$JWM_VER" | grep -aE '^2\.3\.[6-9]|^2\.[4-9]|^[3-9]' 2>/dev/null`" ]; then
+  AEROSNAP="`grep -a 'aerosnap<.*>' /etc/xdg/templates/_root_.jwmrc 2>/dev/null`"
+  [ "$AEROSNAP" ] && AEROSNAP="true" || AEROSNAP="false"
+  AERO_SNAP='
+   <hbox>
+    <checkbox tooltip-text=" '$(gettext 'Maximiza automáticamente la ventana
+  cuando el cursor toca el borde de la pantalla.')' ">
+      <label>'$(gettext 'Aero Snap')'  |</label>
+      <variable>AEROSNAP</variable>
+      <default>'`echo $AEROSNAP`'</default>
+    </checkbox>
+    <text><label>'$(gettext 'Retraso')':</label></text>
+    <spinbutton editable="false" width-request="121" range-min="500" range-max="2000" range-step="10" range-value="700" tooltip-text=" '$(gettext 'Retraso de transición en el borde de la pantalla antes de la ventana se
+  se mueva al siguiente escritorio.  (Predeterminado:700 ms)')' ">
+      <variable>MOVE_MODE_DELAY</variable>
+      <input>echo '$MOVE_MODE_DELAY'</input>
+    </spinbutton>
+   </hbox>'
+ fi
+fi
+
+###############################################################################
+#
+# Tray tab
+#
+###############################################################################
+
+if [ ! -d /usr/local/jwm_config* ]; then #legacy jwm desktop environment
+ JWM_HOME="/root"
+ jwmtray=".jwmrc-tray"
+ main_tray='          '
+ tasklist_tray='.jwmrc-tray'
+ attributes_tray=''
+ current_tray='panel'
+ profile_tray='jwmrc-tray'
+ widget_tray=''
+ BUTTON1=''
+ BUTTON2=''
+ ACCESSORY_PANEL=$(cat $PREFDIR/accessory_tray 2>/dev/null)
+ [ ! "$ACCESSORY_PANEL" ] && ACCESSORY_PANEL="false"
+ if [ "$ACCESSORY_PANEL" = "true" ]; then #launchbar
+  DEFAULT_TRAY=$(cat $PREFDIR/default_tray 2>/dev/null)
+  [ ! "$DEFAULT_TRAY" ] && DEFAULT_TRAY="jwmrc-tray1"
+  if [ "$DEFAULT_TRAY" = "jwmrc-tray1" ]; then
+   jwmtray=".jwmrc-tray"
+   jwmtray_label="jwmrc-tray1"
+  elif [ "$DEFAULT_TRAY" = "jwmrc-tray2" ]; then
+   jwmtray=".jwmrc-tray2"
+   jwmtray_label="jwmrc-tray2"
+  else
+   jwmtray=".jwmrc-tray"
+   jwmtray_label="jwmrc-tray1"
+  fi
+
+  #define proxy names for the selected tray
+  main_tray=" : `echo "$jwmtray_label" | cut -d "-" -f2 | sed 's/tray/tray-/'`"
+  tasklist_tray=".jwmrc-tray"
+  attributes_tray="$main_tray"
+  current_tray=$(echo "$main_tray" | cut -d ":" -f2)
+  profile_tray=$(echo "$jwmtray" | cut -d "." -f2)
+  widget_tray=" : Panel-1"
+
+  #define tray-selection buttons
+  ACTIVE_TRAY=$(echo "$jwmtray_label" | cut -d "-" -f2)
+  [ ! "$ACTIVE_TRAY" ] && ACTIVE_TRAY="tray1"
+  if [ "$ACTIVE_TRAY" = "tray1" ]; then
+   ln -sf $ICONDIR/active_tray.svg $ICONDIR/tray1.svg
+   INPUT1='  <input file>'$ICONDIR'/tray1.svg</input><height>22</height><width>22</width>'
+   INPUT2=''
+   TOOLTIP1='tooltip-text=" '$(gettext 'Panel-1 is seleccionado')' "'
+   TOOLTIP2='tooltip-text=" '$(gettext 'Seleccionar Panel-2')' "'
+  elif [ "$ACTIVE_TRAY" = "tray2" ]; then
+   ln -sf $ICONDIR/active_tray.svg $ICONDIR/tray2.svg
+   INPUT1=''
+   INPUT2='  <input file>'$ICONDIR'/tray2.svg</input><height>22</height><width>22</width>'
+   TOOLTIP1='tooltip-text=" '$(gettext 'Seleccionar Panel-1')' "'
+   TOOLTIP2='tooltip-text=" '$(gettext 'Panel-2 seleccionado')' "'
+  fi
+
+  if [ "`grep -a -- '<Tray' $HOME/.jwmrc-tray 2>/dev/null`" ]; then
+   BUTTON1='<button height-request="35" '$TOOLTIP1'>
+     <label>Panel-1</label>
+     '$INPUT1'
+     <action>echo "jwmrc-tray1" > $PREFDIR/default_tray</action>
+     <action>touch /tmp/jwmdesk-page</action>
+     <action>jwmdesk &</action>
+     <action>exit:quit_now</action>
+    </button>'
+  fi
+
+  if [ "`grep -a -- '<Tray' $HOME/.jwmrc-tray2 2>/dev/null`" ]; then
+   BUTTON2='<button height-request="35" '$TOOLTIP2'>
+     <label>Panel-2</label>
+     '$INPUT2'
+     <action>echo "jwmrc-tray2" > $PREFDIR/default_tray</action>
+     <action>touch /tmp/jwmdesk-page</action>
+     <action>jwmdesk &</action>
+     <action>exit:quit_now</action>
+    </button>'
+  fi
+ fi
+ [ ! -f $JWM_HOME/$jwmtray-bak ] && cp $JWM_HOME/$jwmtray $JWM_HOME/$jwmtray-bak #backup $jwmtray
+else #jwm_config desktop environment
+ if [ "`grep -aE -- '<Dock|Dock>' $HOME/.jwm/jwmrc-tray2 2>/dev/null`" ] && [ -s $HOME/.jwm/jwmrc-tray1 ]; then # assure primary tray is jwmrc-tray1
+  cp -f $HOME/.jwm/jwmrc-tray1 /tmp/tmp
+  mv -f $HOME/.jwm/jwmrc-tray2 $HOME/.jwm/jwmrc-tray1
+  mv -f /tmp/tmp $HOME/.jwm/jwmrc-tray2
+ fi
+ if [ ! "`grep -aE -- '<Dock|Dock>' $HOME/.jwm/jwmrc-tray2 2>/dev/null`" ] && [ "`grep -aF -- '<TrayButton popup' $HOME/.jwm/jwmrc-tray2 2>/dev/null`" ]; then
+   echo "true" > $PREFDIR/accessory_tray
+ else
+   echo "false" > $PREFDIR/accessory_tray
+ fi
+ JWM_HOME="/root/.jwm"
+ DEFAULT_TRAY=$(cat $PREFDIR/default_tray 2>/dev/null)
+ [ ! "$DEFAULT_TRAY" ] && DEFAULT_TRAY="jwmrc-tray1"
+ jwmtray="$DEFAULT_TRAY"
+
+ #define proxy names for the selected tray
+ main_tray=" : `echo "$jwmtray" | cut -d "-" -f2 | sed 's/tray/tray-/'`"
+ if [ "`grep -a -- '<TaskList ' $JWM_HOME/jwmrc-tray1`" ]; then
+  tasklist_tray="jwmrc-tray1"
+ elif [ "`grep -a -- '<TaskList ' $JWM_HOME/jwmrc-tray2`" ]; then
+  tasklist_tray="jwmrc-tray2"
+ fi
+ sed -i -e 's/^[ \t]*//' $JWM_HOME/$tasklist_tray #remove text indentation
+ attributes_tray="$main_tray"
+ current_tray=$(echo "$main_tray" | cut -d ":" -f2)
+ profile_tray=$(echo "$jwmtray" | cut -d "." -f2)
+ widget_tray=" : `echo "$tasklist_tray" | cut -d "-" -f2 | sed 's/tray/tray-/'`"
+
+ #define tray-selection buttons
+ ACTIVE_TRAY=$(echo "$jwmtray" | cut -d "-" -f2)
+ [ ! "$ACTIVE_TRAY" ] && ACTIVE_TRAY="tray1"
+ if [ "$ACTIVE_TRAY" = "tray1" ]; then
+  ln -sf $ICONDIR/active_tray.svg $ICONDIR/tray1.svg
+  INPUT1='  <input file>'$ICONDIR'/tray1.svg</input><height>22</height><width>22</width>'
+  INPUT2=''
+  TOOLTIP1='tooltip-text=" '$(gettext 'Panel-1 is seleccionado')' "'
+  TOOLTIP2='tooltip-text=" '$(gettext 'Seleccionar Panel-2')' "'
+ elif [ "$ACTIVE_TRAY" = "tray2" ]; then
+  ln -sf $ICONDIR/active_tray.svg $ICONDIR/tray2.svg
+  INPUT1=''
+  INPUT2='  <input file>'$ICONDIR'/tray2.svg</input><height>22</height><width>22</width>'
+  TOOLTIP1='tooltip-text=" '$(gettext 'Seleccionar Panel-1')' "'
+  TOOLTIP2='tooltip-text=" '$(gettext 'Panel-2 is seleccionado')' "'
+ fi
+
+ if [ "`grep -a -- '<Tray' $HOME/.jwm/jwmrc-tray1 2>/dev/null`" ]; then
+  BUTTON1='<button height-request="35" '$TOOLTIP1'>
+    <label>Panel-1</label>
+    '$INPUT1'
+    <action>echo "jwmrc-tray1" > $PREFDIR/default_tray</action>
+    <action>touch /tmp/jwmdesk-page</action>
+    <action>jwmdesk &</action>
+    <action>exit:quit_now</action>
+   </button>'
+ fi
+
+ if [ "`grep -a -- '<Tray' $HOME/.jwm/jwmrc-tray2 2>/dev/null`" ]; then
+  BUTTON2='<button height-request="35" '$TOOLTIP2'>
+    <label>Panel-2</label>
+    '$INPUT2'
+    <action>echo "jwmrc-tray2" > $PREFDIR/default_tray</action>
+    <action>touch /tmp/jwmdesk-page</action>
+    <action>jwmdesk &</action>
+    <action>exit:quit_now</action>
+   </button>'
+ fi
+fi
+
+export JWM_HOME jwmtray main_tray tasklist_tray attributes_tray current_tray profile_tray widget_tray
+
+#set missing Tasklist tag in some legacy jwmrc-tray files
+if [ "`grep -aF -- 'Additional TaskList attribute' $JWM_HOME/$jwmtray 2>/dev/null`" ] && [ ! "`grep -a -- '<TaskList ' $JWM_HOME/$jwmtray`" ]; then
+ sed -i -e '/Additional TaskList attribute/a \		<TaskList maxwidth="200"\/>' -e '/<TaskList\/>/d' $JWM_HOME/$jwmtray
+fi
+
+#define initial version-dependent JWM configuration options
+if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then
+ if ((`bc <<< "$JWM_VER<=1024"`)); then
+  [ ! "`grep -a '<TaskListStyle insert=' $HOME/.jwm/jwmrc-personal`" ] && sed -i -e 's/^.*<JWM>.*$/<JWM>\n\n<!-- Tray Task Insert -->\n<TaskListStyle insert=\"right\"\/>/' $HOME/.jwm/jwmrc-personal
+ fi
+else
+ if [ "`echo "$JWM_VER" | grep -aE '^1|^2\.[0-2]' 2>/dev/null`" ]; then
+  [ ! "`grep -a '<TaskListStyle insert=' $HOME/.jwm/jwmrc-personal`" ] && sed -i -e 's/^.*<JWM>.*$/<JWM>\n\n<!-- Tray Task Insert -->\n<TaskListStyle insert=\"right\"\/>/' $HOME/.jwm/jwmrc-personal
+ fi
+fi
+
+#define spacing of tray notification icons
+if [ "`grep -aE -- '<Dock|Dock>' $JWM_HOME/.jwmrc-tray`" ]; then
+ dock_tray=".jwmrc-tray"
+elif [ "`grep -aE -- '<Dock|Dock>' $JWM_HOME/jwmrc-tray1`" ]; then
+ dock_tray="jwmrc-tray1"
+elif [ "`grep -aE -- '<Dock|Dock>' $JWM_HOME/jwmrc-tray2`" ]; then
+ dock_tray="jwmrc-tray2"
+elif [ "`grep -aE -- '<Dock|Dock>' $JWM_HOME/jwmrc-tray3`" ]; then
+ dock_tray="jwmrc-tray3"
+elif [ "`grep -aE -- '<Dock|Dock>' $JWM_HOME/jwmrc-tray4`" ]; then
+ dock_tray="jwmrc-tray4"
+fi
+export dock_tray
+DOCK=''
+DOCK_SPACING=$(cat $PREFDIR/dock_spacing 2>/dev/null)
+[ ! "$DOCK_SPACING" ] && DOCK_SPACING="0"
+if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then
+ if ((`bc <<< "$JWM_VER>=1578"`)); then
+  DOCK='<vbox>
+   <hbox>
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Notification Dock')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+    <text><label>'$(gettext 'Icon spacing')':</label></text>
+    <spinbutton editable="false" width-request="121" range-min="0" range-max="10" range-step="1" range-value="0" tooltip-text=" '$(gettext 'Pixel spacing of notification icons (Range:0-10px)')' ">
+      <variable>DOCK_SPACING</variable>
+      <input>echo '$DOCK_SPACING'</input>
+      <action>echo "$DOCK_SPACING" > '$PREFDIR'/dock_spacing</action>
+      <action>sed -i "s/^.*\<Dock.*$/		\<Dock spacing=\"$DOCK_SPACING\"\>\<\/Dock\>/" $JWM_HOME/$dock_tray</action>
+    </spinbutton>
+   </hbox>
+   </vbox>'
+ fi
+else
+ if [ "`echo "$JWM_VER" | grep -aE '^2\.3\.[7-9]|^2\.[4-9]|^[3-9]' 2>/dev/null`" ]; then
+  DOCK='<vbox>
+   <hbox>
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Muelle de notificaciones')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+    <text><label>'$(gettext 'Espaciado de iconos')':</label></text>
+    <spinbutton editable="false" width-request="121" range-min="0" range-max="10" range-step="1" range-value="0" tooltip-text=" '$(gettext 'Espaciado de píxeles de los iconos de notificación (Rango:0-10px)')' ">
+      <variable>DOCK_SPACING</variable>
+      <input>echo '$DOCK_SPACING'</input>
+      <action>echo "$DOCK_SPACING" > '$PREFDIR'/dock_spacing</action>
+      <action>sed -i "s/^.*\<Dock.*$/		\<Dock spacing=\"$DOCK_SPACING\"\>\<\/Dock\>/" $JWM_HOME/$dock_tray</action>
+    </spinbutton>
+   </hbox>
+   </vbox>'
+ fi
+fi
+
+#define $jwmtray format
+tray_format()
+{
+grep -aEv -- '<!--[[:blank:]]*<TrayButton' $JWM_HOME/$jwmtray | sed '/^$/d' > /tmp/$jwmtray # remove blank lines and commented Traybutton lines in $jwmtray
+if [ -d /usr/local/jwm_config* ]; then # assure $jwmtray compatibility with jwm_config
+ grep -aE -- '<?xml|<JWM>|<RestartCommand|<Include|<Tray |Additional TrayButton' /tmp/$jwmtray > /tmp/tmp1
+ grep -aF -- '<TrayButton label' /tmp/$jwmtray > /tmp/tmp2
+ grep -aF -- '<TrayButton popup' /tmp/$jwmtray > /tmp/tmp3
+ grep -aEv -- '<?xml|<JWM>|<RestartCommand|<Include|<Tray |Additional TrayButton|<TrayButton label|<TrayButton popup|<Spacer width="0"|<!--' /tmp/$jwmtray > /tmp/tmp4
+ cat /tmp/tmp1 > /tmp/$jwmtray # format head of $jwmtray
+ cat /tmp/tmp2 | uniq >> /tmp/$jwmtray # add menu label(s) to $jwmtray
+ echo "<Spacer width=\"10\" height=\"20\"></Spacer>" >> /tmp/$jwmtray # add spacer after menu label(s)
+ cat /tmp/tmp3 | awk '!a[$0]++' | awk -F'c:' '!seen[$2]++' >> /tmp/$jwmtray # concatenate button launchers to left/top side of tray; remove lines with duplicate executables
+ cat /tmp/tmp4 | uniq >> /tmp/$jwmtray # append tail of $jwmtray
+ sed -i -e 's/^[ \t]*//' /tmp/$jwmtray # remove $jwmtray text-indentation
+ if [ ! "`grep -aF -- '<TrayButton label' /tmp/$jwmtray`" ]; then
+  grep -aFv -- '<Spacer' /tmp/$jwmtray > /tmp/tmp
+  mv -f /tmp/tmp /tmp/$jwmtray
+ fi
+else # legacy $jwmtray
+ grep -aE -- '<?xml|<JWM>|<Include|<Tray |Additional TrayButton' /tmp/$jwmtray > /tmp/tmp1
+ grep -aF -- '<TrayButton label' /tmp/$jwmtray > /tmp/tmp2
+ grep -aF -- '<TrayButton popup' /tmp/$jwmtray > /tmp/tmp3
+ grep -aEv -- '<?xml|<JWM>|<Include|<Tray |Additional TrayButton|<TrayButton label|<TrayButton popup' /tmp/$jwmtray > /tmp/tmp4
+ cat /tmp/tmp1 > /tmp/$jwmtray # format head of $jwmtray
+ cat /tmp/tmp2 | uniq >> /tmp/$jwmtray # add menu label(s) to $jwmtray
+ cat /tmp/tmp3 | awk '!a[$0]++' | awk -F'c:' '!seen[$2]++' >> /tmp/$jwmtray # concatenate button launchers and remove lines with duplicate executables
+ cat /tmp/tmp4 | uniq >> /tmp/$jwmtray # append tail of $jwmtray
+fi
+mv -f /tmp/$jwmtray $JWM_HOME/
+}
+export -f tray_format
+tray_format
+
+#define hybrid tray
+ tray_hybrid()
+{
+if [ "$AUTOHIDE_HYBRID" = "true" ]; then
+ if [ -d /usr/local/jwm_config* ]; then
+  if [ ! "`grep -aF -- 'hybrid</Include>' $JWM_HOME/$jwmtray 2>/dev/null`" ]; then
+   sed -i -e "/<JWM>/a \	<Include>/root/.jwm/"$jwmtray"_hybrid</Include>" $JWM_HOME/$jwmtray
+  fi
+ else
+  if [ ! "`grep -aF -- 'hybrid</Include>' $JWM_HOME/$jwmtray 2>/dev/null`" ]; then
+   sed -i -e "/<JWM>/a \	<Include>/root/"$jwmtray"_hybrid</Include>" $JWM_HOME/$jwmtray
+  fi
+ fi
+else
+ sed -i -e '/hybrid<\/Include>/d' $JWM_HOME/$jwmtray
+fi
+}
+export -f tray_hybrid
+
+HYBRID=''
+AUTOHIDE_HYBRID='false'
+
+if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then
+ if ((`bc <<< "$JWM_VER>=1271"`)); then
+  if [ ! "`grep -aE -- '<Dock|Dock>' $JWM_HOME/$jwmtray 2>/dev/null`" ]; then
+   AUTOHIDE_HYBRID="true" || AUTOHIDE_HYBRID='false'
+   HYBRID='
+    <radiobutton tooltip-text=" '$(gettext 'Hide tray behind windows unless mouseover')' ">
+     <label>'$(gettext 'Hybrid')'</label>
+     <variable>AUTOHIDE_HYBRID</variable>
+     <default>'`echo $AUTOHIDE_HYBRID`'</default>
+      <action>if true disable:TRAY_LAYER</action>
+    </radiobutton>'
+  fi
+ fi
+else
+ if [ "`echo "$JWM_VER" | grep -aE '^2\.3\.[2-9]|^2\.[4-9]|^[3-9]' 2>/dev/null`" ]; then
+  if [ ! "`grep -aE -- '<Dock|Dock>' $JWM_HOME/$jwmtray 2>/dev/null`" ]; then
+   AUTOHIDE_HYBRID="true" || AUTOHIDE_HYBRID='false'
+   HYBRID='
+    <radiobutton tooltip-text=" '$(gettext 'Hide tray behind windows unless mouseover')' ">
+     <label>'$(gettext 'Hybrid')'</label>
+     <variable>AUTOHIDE_HYBRID</variable>
+     <default>'`echo $AUTOHIDE_HYBRID`'</default>
+      <action>if true disable:TRAY_LAYER</action>
+    </radiobutton>'
+  fi
+ fi
+fi
+
+#define new tray settings
+tray_new()
+{
+rm /tmp/jwmdesk/trayl
+echo $TRAY_LAYER >> /tmp/jwmdesk/trayl
+TRAY_LAYER=$(sed -e 's/encima/above/g' -e 's/oculto/below/g' /tmp/jwmdesk/trayl)
+rm /tmp/jwmdesk/halingg
+echo $HALIGN >> /tmp/jwmdesk/halingg
+HALIGN=$(sed -e 's/izquierda/left/g' -e 's/centro/center/g' -e 's/derecha/right/g' /tmp/jwmdesk/halingg)
+rm /tmp/jwmdesk/halign
+echo $VALIGN >> /tmp/jwmdesk/halign
+VALIGN=$(sed -e 's/abajo/bottom/g' -e 's/centro/center/g' -e 's/arriba/top/g' /tmp/jwmdesk/halign)
+sed -i -e 's/^.*<Tray .*$/	<Tray autohide="" insert="" x="" y="" border="" width="" height="" layer="" layout="" halign="" valign="" >/' $JWM_HOME/$jwmtray
+if [ "$TRAY_LAYOUT" = "vertical" ]; then
+ TRAYWIDTH="$TRAY_HEIGHT"
+ TRAYHEIGHT="0"
+else
+ TRAYWIDTH="0"
+ TRAYHEIGHT="$TRAY_HEIGHT"
+fi
+[ "$TRAYHEIGHT" = "" ] && TRAYHEIGHT="28"
+[ "$AUTOHIDE_HYBRID" = "true" ] && AUTOHIDE_NORMAL="true"
+if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then #JWM vgit/vsvn release
+ if ((`bc <<< "$JWM_VER<=1024"`)); then
+  [ "$AUTOHIDE_NORMAL" != "true" -a "$AUTOHIDE_NORMAL" != "false" ] && AUTOHIDE_NORMAL="false"
+  if [ "$AUTOHIDE_NORMAL" = "true" ]; then
+   [ "$TRAY_LAYOUT" = "horizontal" ] && [ "$VALIGN" = "bottom" ] && AUTOHIDE_NORMAL="true"
+   [ "$TRAY_LAYOUT" = "horizontal" ] && [ "$VALIGN" = "center" ] && AUTOHIDE_NORMAL="false"
+   [ "$TRAY_LAYOUT" = "horizontal" ] && [ "$VALIGN" = "top" ] && AUTOHIDE_NORMAL="true"
+   [ "$TRAY_LAYOUT" = "vertical" ] && [ "$HALIGN" = "left" ] && AUTOHIDE_NORMAL="true"
+   [ "$TRAY_LAYOUT" = "vertical" ] && [ "$HALIGN" = "center" ] && AUTOHIDE_NORMAL="false"
+   [ "$TRAY_LAYOUT" = "vertical" ] && [ "$HALIGN" = "right" ] && AUTOHIDE_NORMAL="true"
+   [ "$AUTOHIDE_NORMAL" = "true" ] && TRAY_LAYER="above"
+  fi
+  sed -i -e 's/^.*Desktops width.*$/<Desktops width="'$DESKTOPS_WIDTH'" height="'$DESKTOPS_HEIGHT'"\/>/' \
+         -e 's/^.*<TaskListStyle insert=.*$/<TaskListStyle insert="right"\/>/' $HOME/.jwm/jwmrc-personal &
+  sed -i -e 's/^.*<Tray .*$/	<Tray autohide="'$AUTOHIDE_NORMAL'" insert="right" x="0" y="-1" border="1" width="'$TRAYWIDTH'" height="'$TRAYHEIGHT'" layer="'$TRAY_LAYER'" layout="'$TRAY_LAYOUT'" halign="'$HALIGN'" valign="'$VALIGN'" >/' $JWM_HOME/$jwmtray
+  sed -i -e 's/^.*<TaskList .*$/		<TaskList maxwidth="'$TASKBAR_WIDTH'"\/>/' $JWM_HOME/$tasklist_tray
+ else
+  [ "$AUTOHIDE_NORMAL" = "true" ] && TRAY_LAYER="above"
+  [ "$AUTOHIDE_NORMAL" = "true" ] && AUTOHIDE_NORMAL="on" || AUTOHIDE_NORMAL="off"
+  if [ "$AUTOHIDE_NORMAL" = "on" ]; then
+   [ "$TRAY_LAYOUT" = "horizontal" ] && [ "$VALIGN" = "bottom" ] && AUTOHIDE_NORMAL="bottom"
+   [ "$TRAY_LAYOUT" = "horizontal" ] && [ "$VALIGN" = "center" ] && AUTOHIDE_NORMAL="off"
+   [ "$TRAY_LAYOUT" = "horizontal" ] && [ "$VALIGN" = "top" ] && AUTOHIDE_NORMAL="top"
+   [ "$TRAY_LAYOUT" = "vertical" ] && [ "$HALIGN" = "left" ] && AUTOHIDE_NORMAL="left"
+   [ "$TRAY_LAYOUT" = "vertical" ] && [ "$HALIGN" = "center" ] && AUTOHIDE_NORMAL="off"
+   [ "$TRAY_LAYOUT" = "vertical" ] && [ "$HALIGN" = "right" ] && AUTOHIDE_NORMAL="right"
+  fi
+  sed -i -e 's/^.*Desktops width.*$/<Desktops width="'$DESKTOPS_WIDTH'" height="'$DESKTOPS_HEIGHT'"\/>/' $HOME/.jwm/jwmrc-personal &
+  sed -i -e 's/^.*<Tray .*$/	<Tray autohide="'$AUTOHIDE_NORMAL'" insert="right" x="0" y="-1" width="'$TRAYWIDTH'" height="'$TRAYHEIGHT'" layer="'$TRAY_LAYER'" layout="'$TRAY_LAYOUT'" halign="'$HALIGN'" valign="'$VALIGN'" >/' $JWM_HOME/$jwmtray
+  if [ -d /usr/local/jwm_config* ]; then
+   sed -i -e 's/^.*<TaskList .*$/<TaskList maxwidth="'$TASKBAR_WIDTH'"\/>/' $JWM_HOME/$tasklist_tray
+  else
+   sed -i -e 's/^.*<TaskList .*$/		<TaskList maxwidth="'$TASKBAR_WIDTH'"\/>/' $JWM_HOME/$tasklist_tray
+  fi
+  if [ "$AUTOHIDE_HYBRID" = "true" ]; then
+   grep -aFv -- '_hybrid</Include>' $JWM_HOME/$jwmtray | sed -e 's%autohide="\(top\|bottom\|left\|right\)"%autohide="off"%' -e "s%layer=\"above\"%layer=\"below\"%" | sed -e 's/^[ \t]*//' > "$JWM_HOME/$jwmtray"_hybrid
+  else
+   [ -f $HOME/.jwm/jwmrc-tray2_hybrid ] && rm -f $HOME/.jwm/jwmrc-tray2_hybrid
+  fi
+ fi
+else #JWM standard release
+ if [ "`echo "$JWM_VER" | grep -aE '^1|^2\.[0-2]' 2>/dev/null`" ]; then
+  [ "$AUTOHIDE_NORMAL" != "true" -a "$AUTOHIDE_NORMAL" != "false" ] && AUTOHIDE_NORMAL="false"
+  if [ "$AUTOHIDE_NORMAL" = "true" ]; then
+   [ "$TRAY_LAYOUT" = "horizontal" ] && [ "$VALIGN" = "bottom" ] && AUTOHIDE_NORMAL="true"
+   [ "$TRAY_LAYOUT" = "horizontal" ] && [ "$VALIGN" = "center" ] && AUTOHIDE_NORMAL="false"
+   [ "$TRAY_LAYOUT" = "horizontal" ] && [ "$VALIGN" = "top" ] && AUTOHIDE_NORMAL="true"
+   [ "$TRAY_LAYOUT" = "vertical" ] && [ "$HALIGN" = "left" ] && AUTOHIDE_NORMAL="true"
+   [ "$TRAY_LAYOUT" = "vertical" ] && [ "$HALIGN" = "center" ] && AUTOHIDE_NORMAL="false"
+   [ "$TRAY_LAYOUT" = "vertical" ] && [ "$HALIGN" = "right" ] && AUTOHIDE_NORMAL="true"
+   [ "$AUTOHIDE_NORMAL" = "true" ] && TRAY_LAYER="above"
+  fi
+  sed -i -e 's/^.*Desktops width.*$/<Desktops width="'$DESKTOPS_WIDTH'" height="'$DESKTOPS_HEIGHT'"\/>/' \
+         -e 's/^.*<TaskListStyle insert=.*$/<TaskListStyle insert="right"\/>/' $HOME/.jwm/jwmrc-personal &
+  sed -i -e 's/^.*<Tray .*$/	<Tray autohide="'$AUTOHIDE_NORMAL'" insert="right" x="0" y="-1" border="1" width="'$TRAYWIDTH'" height="'$TRAYHEIGHT'" layer="'$TRAY_LAYER'" layout="'$TRAY_LAYOUT'" halign="'$HALIGN'" valign="'$VALIGN'" >/' $JWM_HOME/$jwmtray
+  sed -i -e 's/^.*<TaskList .*$/		<TaskList maxwidth="'$TASKBAR_WIDTH'"\/>/' $JWM_HOME/$tasklist_tray
+ else
+  [ "$AUTOHIDE_NORMAL" = "true" ] && TRAY_LAYER="above"
+  [ "$AUTOHIDE_NORMAL" = "true" ] && AUTOHIDE_NORMAL="on" || AUTOHIDE_NORMAL="off"
+  if [ "$AUTOHIDE_NORMAL" = "on" ]; then
+   [ "$TRAY_LAYOUT" = "horizontal" ] && [ "$VALIGN" = "bottom" ] && AUTOHIDE_NORMAL="bottom"
+   [ "$TRAY_LAYOUT" = "horizontal" ] && [ "$VALIGN" = "center" ] && AUTOHIDE_NORMAL="off"
+   [ "$TRAY_LAYOUT" = "horizontal" ] && [ "$VALIGN" = "top" ] && AUTOHIDE_NORMAL="top"
+   [ "$TRAY_LAYOUT" = "vertical" ] && [ "$HALIGN" = "left" ] && AUTOHIDE_NORMAL="left"
+   [ "$TRAY_LAYOUT" = "vertical" ] && [ "$HALIGN" = "center" ] && AUTOHIDE_NORMAL="off"
+   [ "$TRAY_LAYOUT" = "vertical" ] && [ "$HALIGN" = "right" ] && AUTOHIDE_NORMAL="right"
+  fi
+  sed -i -e 's/^.*Desktops width.*$/<Desktops width="'$DESKTOPS_WIDTH'" height="'$DESKTOPS_HEIGHT'"\/>/' $HOME/.jwm/jwmrc-personal &
+  sed -i -e 's/^.*<Tray .*$/	<Tray autohide="'$AUTOHIDE_NORMAL'" insert="right" x="0" y="-1" width="'$TRAYWIDTH'" height="'$TRAYHEIGHT'" layer="'$TRAY_LAYER'" layout="'$TRAY_LAYOUT'" halign="'$HALIGN'" valign="'$VALIGN'" >/' $JWM_HOME/$jwmtray
+  if [ -d /usr/local/jwm_config* ]; then
+   sed -i -e 's/^.*<TaskList .*$/<TaskList maxwidth="'$TASKBAR_WIDTH'"\/>/' $JWM_HOME/$tasklist_tray
+  else
+   sed -i -e 's/^.*<TaskList .*$/		<TaskList maxwidth="'$TASKBAR_WIDTH'"\/>/' $JWM_HOME/$tasklist_tray
+  fi
+  if [ "$AUTOHIDE_HYBRID" = "true" ]; then
+   sed -i -e "s%layer=\"below\"%layer=\"above\"%" -e "s%layer=\"normal\"%layer=\"above\"%" $JWM_HOME/$jwmtray
+   grep -aFv -- '_hybrid</Include>' $JWM_HOME/$jwmtray | sed -e 's%autohide="\(top\|bottom\|left\|right\)"%autohide="off"%' -e "s%layer=\"above\"%layer=\"below\"%" | sed -e 's/^[ \t]*//' > "$JWM_HOME/$jwmtray"_hybrid
+  else
+   [ -f $HOME/.jwm/jwmrc-tray2_hybrid ] && rm -f $HOME/.jwm/jwmrc-tray2_hybrid
+  fi
+ fi
+fi
+sync
+[ -d /usr/local/jwm_config* ] && sed -i -e 's/^[ \t]*//' $JWM_HOME/$jwmtray
+}
+export -f tray_new
+
+#define current tray settings
+AUTOHIDE_NORMAL=$(grep -aFi -- '<Tray ' $JWM_HOME/$jwmtray | grep -a -om1 -- " autohide=.* " | cut -d'"' -f2)
+[ "$AUTOHIDE_NORMAL" = "off" -o "$AUTOHIDE_NORMAL" = "" ] && AUTOHIDE_NORMAL="false"
+[ "`echo "$AUTOHIDE_NORMAL" | grep -aE 'left|right|top|bottom'`" ] && AUTOHIDE_NORMAL="true"
+[ "`grep -a -- 'hybrid</Include>' $JWM_HOME/$jwmtray 2>/dev/null`" ] && AUTOHIDE_HYBRID="true" || AUTOHIDE_HYBRID="false"
+[ "$AUTOHIDE_HYBRID" = "true" ] && AUTOHIDE_NORMAL="false" AUTOHIDE_DISABLE="false"
+[ "$AUTOHIDE_NORMAL" = "true" ] && AUTOHIDE_HYBRID="false" AUTOHIDE_DISABLE="false"
+[ "$AUTOHIDE_NORMAL" = "false" ] && [ "$AUTOHIDE_HYBRID" = "false" ] && AUTOHIDE_DISABLE="true"
+
+rm /tmp/jwmdesk/trayl
+echo `grep -aFi -- '<Tray ' $JWM_HOME/$jwmtray | grep -a -om1 -- " layer=.* " | cut -d'"' -f2` >> /tmp/jwmdesk/trayl
+TRAY_LAYER=$(sed -e 's/above/encima/g' -e 's/below/oculto/g' /tmp/jwmdesk/trayl)
+[ "$TRAY_LAYER" = "" ] && TRAY_LAYER="above"
+
+TRAY_LAYOUT=$(grep -aFi -- '<Tray ' $JWM_HOME/$jwmtray | grep -a -om1 -- " layout=.* " | cut -d'"' -f2)
+[ "$TRAY_LAYOUT" != "horizontal" -a "$TRAY_LAYOUT" != "vertical" ] && TRAY_LAYOUT="horizontal"
+
+TRAY_HEIGHT=$(grep -aFi -- '<Tray ' $JWM_HOME/$jwmtray | grep -a -om1 -- " height=.* " | cut -d'"' -f2)
+if [ "$TRAY_LAYOUT" = "vertical" ]; then
+ TRAY_WIDTH=$(grep -aFi -- '<Tray ' $JWM_HOME/$jwmtray | grep -a -om1 -- " width=.* " | cut -d'"' -f2)
+ TRAY_HEIGHT="$TRAY_WIDTH"
+fi
+[[ $TRAY_HEIGHT != [2-6][0-9] ]] && TRAY_HEIGHT="28"
+
+rm /tmp/jwmdesk/halingg
+echo `grep -aFi -- '<Tray ' $JWM_HOME/$jwmtray | grep -a -om1 -- " halign=.* " | cut -d'"' -f2` >> /tmp/jwmdesk/halingg
+HALIGN=$(sed -e 's/left/izquierda/g' -e 's/center/centro/g' -e 's/right/derecha/g' /tmp/jwmdesk/halingg)
+[ "$HALIGN" != "izquierda" -a "$HALIGN" != "centro" -a "$HALIGN" != "derecha" ] && HALIGN="left"
+rm /tmp/jwmdesk/halign
+echo `grep -aFi -- '<Tray ' $JWM_HOME/$jwmtray | grep -a -om1 -- " valign=.* " | cut -d'"' -f2` >> /tmp/jwmdesk/halign
+VALIGN=$(sed -e 's/bottom/abajo/g' -e 's/center/centro/g' -e 's/top/arriba/g' /tmp/jwmdesk/halign)
+[ "$VALIGN" != "abajo" -a "$VALIGN" != "centro" -a "$VALIGN" != "arriba" ] && VALIGN="bottom"
+
+DESKTOPS=$(grep -a '<Desktops count' $HOME/.jwm/jwmrc-personal | cut -f2- -d '"' | cut -f1 -d '"')
+[ "$DESKTOPS" = "" ] && DESKTOPS="2"
+DESKTOPS_HEIGHT=$(grep -a '<Desktops width' $HOME/.jwm/jwmrc-personal | awk '{print $3}' | cut -f2- -d '"' | cut -f1 -d '"')
+[ "$DESKTOPS_HEIGHT" = "" ] && DESKTOPS_HEIGHT="2"
+DESKTOPS_WIDTH=$(grep -a '<Desktops width' $HOME/.jwm/jwmrc-personal | awk '{print $2}' | cut -f2- -d '"' | cut -f1 -d '"')
+[ "$DESKTOPS_WIDTH" = "" ] && DESKTOPS_WIDTH="2"
+
+[ "`grep -aF -- '></TaskList>' $JWM_HOME/$jwmtray 2>/dev/null`" ] && sed -i s'/><\/TaskList>/\/>/' $JWM_HOME/$jwmtray #remove invalid XML tag
+TASKBAR_WIDTH=$(grep -a -- '<TaskList ' $JWM_HOME/$tasklist_tray | grep -a -- maxwidth | cut -f2- -d '"' | cut -f1 -d '"')
+[ "$TASKBAR_WIDTH" = "" ] && TASKBAR_WIDTH="200"
+
+if [ "`grep -a 'Desktops width' $HOME/.jwm/jwmrc-personal`" ]; then #Modern JWM virtual desktops
+DTP='
+   <vbox>
+   <hbox>
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Selector de escritorios')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+    <text><label>'$(gettext 'Filas x Columnas')':</label></text>
+    <spinbutton editable="false" width-request="58" range-min="1" range-max="2" range-step="1" range-value="2" tooltip-text=" '$(gettext 'Filas en el selector de escritorios (1-2)')' ">
+      <variable>DESKTOPS_HEIGHT</variable>
+      <input>echo '$DESKTOPS_HEIGHT'</input>
+    </spinbutton>
+    <spinbutton editable="false" width-request="58" range-min="1" range-max="8" range-step="1" range-value="2" tooltip-text=" '$(gettext 'Columnas en el selector de escritorios (1-8)')' ">
+      <variable>DESKTOPS_WIDTH</variable>
+      <input>echo '$DESKTOPS_WIDTH'</input>
+    </spinbutton>
+   </hbox>
+   </vbox>'
+elif [ "`grep -a 'Desktops count' $HOME/.jwm/jwmrc-personal`" ]; then #Legacy JWM virtual desktops
+DTP='
+   <vbox>
+   <hbox>
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Escritorio virtual')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+    <text><label>'$(gettext 'Numero')' (1-8):</label></text>
+    <spinbutton editable="false" width-request="121" range-min="1" range-max="8" range-step="1" range-value="2" tooltip-text=" '$(gettext 'Numero de escritorios virtuales')' ">
+      <variable>DESKTOPS</variable>
+      <input>echo '$DESKTOPS'</input>
+    </spinbutton>
+   </hbox>
+   </vbox>'
+else DTP=''
+fi
+
+#define placement icon for selected tray
+tray_placement()
+{
+if [ "$VALIGN" = "abajo" ] && [ "$HALIGN" = "izquierda" ]; then
+ ln -sf $ICONDIR/placement_bottomleft.svg $PIXMAPSDIR/tray_placement.svg
+elif [ "$VALIGN" = "abajo" ] && [ "$HALIGN" = "centro" ]; then
+ ln -sf $ICONDIR/placement_bottom.svg $PIXMAPSDIR/tray_placement.svg
+elif [ "$VALIGN" = "abajo" ] && [ "$HALIGN" = "derecha" ]; then
+ ln -sf $ICONDIR/placement_bottomright.svg $PIXMAPSDIR/tray_placement.svg
+elif [ "$VALIGN" = "centro" ] && [ "$HALIGN" = "izquierda" ]; then
+ ln -sf $ICONDIR/placement_left.svg $PIXMAPSDIR/tray_placement.svg
+elif [ "$VALIGN" = "centro" ] && [ "$HALIGN" = "centro" ]; then
+ ln -sf $ICONDIR/placement_center.svg $PIXMAPSDIR/tray_placement.svg
+elif [ "$VALIGN" = "centro" ] && [ "$HALIGN" = "derecha" ]; then
+ ln -sf $ICONDIR/placement_right.svg $PIXMAPSDIR/tray_placement.svg
+elif [ "$VALIGN" = "arriba" ] && [ "$HALIGN" = "izquierda" ]; then
+ ln -sf $ICONDIR/placement_topleft.svg $PIXMAPSDIR/tray_placement.svg
+elif [ "$VALIGN" = "arriba" ] && [ "$HALIGN" = "centro" ]; then
+ ln -sf $ICONDIR/placement_top.svg $PIXMAPSDIR/tray_placement.svg
+elif [ "$VALIGN" = "arriba" ] && [ "$HALIGN" = "derecha" ]; then
+ ln -sf $ICONDIR/placement_topright.svg $PIXMAPSDIR/tray_placement.svg
+fi
+}
+export -f tray_placement
+tray_placement
+
+#define sensitive state of Layer combobox
+LSTATE='true'
+if [ "`grep -aF -- '_hybrid</Include>' $JWM_HOME/$jwmtray 2>/dev/null`" ]; then
+ LSTATE="false"
+elif [ ! "`grep -aE -- 'autohide="off"|autohide="false"' $JWM_HOME/$jwmtray 2>/dev/null`" ]; then
+ LSTATE="false"
+fi
+
+#define tray mixer option
+if [ "`which retrovol_speaker 2>/dev/null`" ] && [ -f /usr/share/retrovol/images/audio-volume-high.svg ]; then
+ MSC="
+   <vbox>
+   <vbox>
+   <hbox>
+    <text><label>$(gettext 'Color del altavoz'):</label></text>
+    <hbox width-request=\"121\">
+    <entry tooltip-text=\" Color del icono de altavoz retrovol \">
+     <input>cat /usr/share/retrovol/dot.speakercolor 2>/dev/null</input>
+     <variable>SPEAKERCOLOR</variable>
+    </entry>
+
+    <colorbutton width-request=\"25\" title=\"Retrovol Speaker Color\" tooltip-text=\" Color selector \">
+     <input file>/usr/share/retrovol/dot.speakercolor</input>
+     <variable>BUTTONCOLOR</variable>
+     <action>echo -n \$BUTTONCOLOR > /usr/share/retrovol/dot.speakercolor</action>
+     <action>refresh:SPEAKERCOLOR</action>
+     <action>retrovol_speaker \$SPEAKERCOLOR</action>
+     <action>[ -d $HOME/.retrovol ] && cp -f /usr/share/retrovol/images/audio-volume-* $HOME/.retrovol</action>
+    </colorbutton>
+   </hbox>
+   </hbox>
+   </vbox>
+   </vbox>"
+elif [ "`which pnmixer_speaker 2>/dev/null`" ] && [ -f /usr/share/pnmixer/pixmaps/pnmixer-high.png ]; then
+ MSC="
+   <vbox>
+   <vbox>
+   <hbox>
+    <text><label>$(gettext 'Speaker color'):</label></text>
+    <hbox width-request=\"121\">
+    <entry tooltip-text=\" Color of pnmixer speaker icon \">
+     <input>cat /usr/share/pnmixer/dot.speakercolor 2>/dev/null</input>
+     <variable>SPEAKERCOLOR</variable>
+    </entry>
+
+    <colorbutton width-request=\"25\" title=\"Pnmixer Speaker Color\" tooltip-text=\" Color selector \">
+     <input file>/usr/share/pnmixer/dot.speakercolor</input>
+     <variable>BUTTONCOLOR</variable>
+     <action>echo -n \$BUTTONCOLOR > /usr/share/pnmixer/dot.speakercolor</action>
+     <action>refresh:SPEAKERCOLOR</action>
+     <action>killall pnmixer</action>
+     <action>pnmixer_speaker \$SPEAKERCOLOR</action>
+     <action>pnmixer &</action>
+    </colorbutton>
+   </hbox>
+   </hbox>
+   </vbox>
+   </vbox>"
+fi
+
+#define tray clock option
+CLOCKCMD="<action>'$WORKDIR'/clock &</action>"
+[ "`which PupClockset 2>/dev/null`" ] && CLOCKCMD="<action>PupClockset &</action>"
+CLOCKFORMAT='<button image-position="0" width-request="151" tooltip-text=" '$(gettext 'Seleccionar el formato digital del reloj')' ">
+     <input file>'$ICONDIR'/clock.svg</input><height>20</height><width>20</width>
+     <label>'$(gettext 'Formato del reloj')'</label>
+     '$CLOCKCMD'
+    </button>'
+
+###############################################################################
+#
+# Launch tab (tray-button configuration)
+# 2006-NOV-05
+# original code by plinej
+#
+# 2009-NOV-06 low and high position fixed by himajin, shinobar
+# 23aug2010 shinobar: skip comments from edit
+# 2012-03-19 full rewrite, 01micko, simplified
+# 2012-05-14 rodin.s: adding gettext
+# 2013-01-26 adjust for jwm>=625
+# 2015-10-15 radky:
+#   adjust format and functions of graphical interface
+#   add enhanced tray-button configuration options
+#   support more than one menu label
+#   support svg image format
+#   support kde/kde4/kde5 button launchers
+#   support jwmrc-tray files in $HOME and $HOME/.jwm
+# 2016-01-01 radky:
+#   add treeview icons and adjust format of graphical interface
+#   support two panels (main panel & accessory launcher panel)
+#   adjust tray-button compatibility in jwm_config environment
+#
+###############################################################################
+
+#create .desktop files for standard tray apps
+[ -f /usr/share/pixmaps/puppy/desktop.svg ] && DESKTOPICON="/usr/share/pixmaps/puppy/desktop.svg" || DESKTOPICON="mini-desktop.xpm"
+echo "[Desktop Entry]
+Encoding=UTF-8
+Type=Application
+NoDisplay=true
+Name=Show desktop
+Exec=showdesktop
+Icon=$DESKTOPICON" > /usr/share/applications/showdesk.desktop
+
+if [ "`which logout_gui 2>/dev/null`" ]; then
+ echo "[Desktop Entry]
+Encoding=UTF-8
+Type=Application
+NoDisplay=true
+Name=Leave Puppy
+Exec=/usr/sbin/logout_gui
+Icon=/usr/local/lib/X11/pixmaps/shutdown48.png" > /usr/share/applications/logout_gui.desktop
+fi
+
+#define togglebutton parameters
+[ ! -f "$TMPDIR/show.png" ] && cp $WORKDIR/icons/showhiddenyes.png $WORKDIR/icons/showhiddenno.png $TMPDIR/
+ln -sf $TMPDIR/showhiddenno.png $TMPDIR/show.png
+
+#define .desktop directory
+DTDIR="/usr/share/applications"
+if [[ `ls /usr/local/share/applications/ 2>/dev/null` ]]; then 
+	DTDIR="${DTDIR} /usr/local/share/applications"
+fi
+export DTDIR
+
+find -L $DTDIR $PIXMAPSDIR /usr/share/icons -type l -delete 2>/dev/null #remove broken symlinks
+
+#get all available applications
+getallapps()
+{
+grep -R "^Exec=" $DTDIR --include="*.desktop" | cut -d ':' -f1 | awk -F'/' '{print $NF}' | sed 's/.desktop//g' | sed '/^$/d' | sort -fu > /tmp/button_menu
+[ -f /tmp/traybutton_new ] && rm -f /tmp/traybutton_new
+}
+export -f getallapps
+
+#get available applications but exclude disabled menu items (default action of JWMdesk)
+getapps()
+{
+NODISPLAY=$(grep -R '^NoDisplay=true' $DTDIR | awk -F'/' '{print $NF}' | cut -d ':' -f1 | sed -e :a -e '$!N; s/\n/|/; ta')
+if [ "$NODISPLAY" ]; then #one or more menu items are hidden by the 'NoDisplay' parameter
+	grep -R "^Exec=" $DTDIR --include="*.desktop" | grep -avwE "$NODISPLAY" | cut -d ':' -f1 | awk -F'/' '{print $NF}' | sed 's/.desktop//g' | sed '/^$/d' | sort -fu > /tmp/button_menu
+else #no menu items are hidden
+	grep -R "^Exec=" $DTDIR --include="*.desktop" | cut -d ':' -f1 | awk -F'/' '{print $NF}' | sed 's/.desktop//g' | sed '/^$/d' | sort -fu > /tmp/button_menu
+fi
+[ -f /tmp/traybutton_new ] && rm -f /tmp/traybutton_new
+}
+export -f getapps
+
+getapps
+
+#get current tray buttons
+currentbuttons()
+{
+CURRENTBTNCODE=$(grep -a -- "TrayButton" $JWM_HOME/$jwmtray|grep -av -- "root:[a-z0-9]"|grep -av -- "Additional TrayButton attribute:")
+CURRENTBTNS=$(grep -a -- "TrayButton" $JWM_HOME/$jwmtray|grep -av -- "root:[a-z0-9]"|\
+	grep -av -- "Additional"|\
+	sed -e 's/.*<TrayButton //g' \
+		-e 's/>/ /g' \
+		-e 's/<.*//g' \
+		-e 's/ border="true"//g' \
+		-e 's/ border="false"//g' \
+		-e 's/ icon/|icon/g' \
+		-e 's/xpm" /xpm"|/g' \
+		-e 's/png" /png"|/g' \
+		-e 's/svg" /svg"|/g' \
+		-e 's/popup="//g' \
+		-e 's/"|icon/|icon/g')
+echo "$CURRENTBTNS" > /tmp/jwm_cur_btns
+echo "$CURRENTBTNCODE" > /tmp/jwm_cur_btn_code
+echo -n > /tmp/tmp
+while read -r line
+ do
+	LAUNCH_ICON="`echo "$line" | grep -a -om1 -- "|icon=.*|" | cut -d'=' -f2- | sed -e 's/\"//g' -e 's/|//g'`"
+	ICONNAME="${LAUNCH_ICON##*/}" #with extension
+	ICONNAMEnx="${ICONNAME%.*}" #no extension
+	echo "$ICONNAMEnx|$line" >> /tmp/tmp
+ done < /tmp/jwm_cur_btns
+ mv -f /tmp/tmp /tmp/jwm_cur_btns
+}
+export -f currentbuttons
+currentbuttons
+
+#delete selected tray button
+button_delete()
+{
+	DELETEBUTTON=$(cat /tmp/traybutton_selected 2>/dev/null)
+	[ ! "$DELETEBUTTON" ] && exit 1
+	grep -aFv -- "$DELETEBUTTON" $JWM_HOME/$jwmtray >/tmp/jwm_new_tray
+	mv -f /tmp/jwm_new_tray $JWM_HOME/$jwmtray
+	rm /tmp/jwm*
+	[ -f /tmp/traybutton_new ] && rm -f /tmp/traybutton_new
+cp -r $JWM_HOME/$jwmtray /var/local/sss/root/
+}
+export -f button_delete
+
+#add new button to tray
+button_add()
+{	
+	NEWBUTTON=$(cat /tmp/traybutton_new 2>/dev/null)
+	[ ! "$NEWBUTTON" ] && exit 1
+	if [[ -f "/usr/share/applications/$NEWBUTTON.desktop" ]]; then
+	 DTD="/usr/share/applications"
+	elif [[ -f "/usr/local/share/applications/$NEWBUTTON.desktop" ]]; then 
+	 DTD="/usr/local/share/applications"
+	elif [[ -f "/usr/share/applications/kde4/$NEWBUTTON.desktop" ]]; then 
+	 DTD="/usr/share/applications/kde4"
+	elif [[ -f "/usr/share/applications/kde5/$NEWBUTTON.desktop" ]]; then 
+	 DTD="/usr/share/applications/kde5"
+	elif [[ -f "/usr/share/applications/kde/$NEWBUTTON.desktop" ]]; then 
+	 DTD="/usr/share/applications/kde"
+	fi
+	BUTTONEXEC=$(grep -a -m1 '^Exec=' "$DTD/$NEWBUTTON.desktop" | cut -d'=' -f2)
+	EXE_PREFIX="exec:"
+	[ "$BUTTONEXEC" = "showdesktop" ] && EXE_PREFIX=""
+	if [ ! "`grep -aF -- $EXE_PREFIX"$BUTTONEXEC" $JWM_HOME/$jwmtray`" ]; then ### check if selected button is already in tray; i.e. do not duplicate
+
+	 # 2009-NOV-06 low and high position fixed 
+	 total=$(wc -l $JWM_HOME/$jwmtray | sed -e 's/ *//' | sed -e 's/ .*//g') ### get total number of lines
+	 low=$(grep -an -- '^[[:blank:]]*<TrayButton' $JWM_HOME/$jwmtray | head -n 1| cut -d':' -f1)  ### get line number of the first button(Menu)
+	 high=$(grep -an -- '^[[:blank:]]*<TrayButton' $JWM_HOME/$jwmtray | tail -n 1| cut -d':' -f1) ### get line number of the last button
+	 high=$(echo "(("$high" + 1))" | bc -l)
+	 last=$(echo "(("$total" - "$high" + 1))" | bc -l)
+	 begin=$(echo "(("$low" + 1))" | bc -l) ### first line with panel buttons
+
+	 cat $JWM_HOME/$jwmtray | head -n "$low" > /tmp/jwmrc-tray-1.txt
+	 if [ -d /usr/local/jwm_config* ]; then
+	   LABELS=$(grep -a -- '<TrayButton label' $JWM_HOME/$jwmtray) ### hack: support more than one menu label (such as emulation of the classic Ubuntu 'Applications' and 'Places' format)
+	   echo "$LABELS" >> /tmp/jwmrc-tray-1.txt ### add all menu labels (this includes a duplicate of the label defined in the 'low' variable above)
+	 fi
+	 cat $JWM_HOME/$jwmtray | tail -n "$last" > /tmp/jwmrc-tray-3.txt
+	 cat /tmp/jwmrc-tray-1.txt /tmp/jwm_cur_btn_code | awk '!a[$0]++' > /tmp/jwmrc-tray-2.txt ### concatenate headers, labels and button code; remove duplicate labels
+
+	 POPUP=$(grep -a -m1 '^Name=' "$DTD/$NEWBUTTON.desktop" | cut -d'=' -f2)
+	 ICON=$(grep -a -m1 '^Icon=' "$DTD/$NEWBUTTON.desktop" | cut -d'=' -f2)
+	 if [ ! "$ICON" ]; then
+	  ICON="no_icon.svg"
+	  echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+	  <svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" height=\"100\" width=\"100\">
+	    <path style=\"fill:none;stroke:#FF0000;stroke-width:50\" d=\"M 2,2 98,2 98,98 2,98 z\"/>
+	  </svg>" > $PIXMAPSDIR/no_icon.svg
+	 fi
+	 ICONNAME="${ICON##*/}" #with extension
+	 [[ $(echo "$ICON" | grep -a '^/') ]] && [ ! -f /usr/share/pixmaps/"$ICONNAME" ] && ln -snf "$ICON" /usr/share/pixmaps/"$ICONNAME"
+	 EXEC=$(grep -a -m1 '^Exec=' "$DTD/$NEWBUTTON.desktop" | cut -d'=' -f2)
+	 EXECUTABLE="exec:"$EXEC""
+	 [ "$EXEC" = "showdesktop" ] && EXECUTABLE="showdesktop"
+
+	 # append new button
+	 echo "		<TrayButton popup=\""$POPUP"\" icon=\""$ICON"\">"$EXECUTABLE"</TrayButton>" >> /tmp/jwmrc-tray-2.txt
+	 cat /tmp/jwmrc-tray-2.txt /tmp/jwmrc-tray-3.txt > /tmp/jwmrc-tray
+	 [ -d /usr/local/jwm_config* ] && sed -i -e 's/^[ \t]*//' /tmp/jwmrc-tray
+	 mv -f /tmp/jwmrc-tray $JWM_HOME/$jwmtray
+	 rm /tmp/jwm*
+	 tray_format
+	else
+	 Xdialog --title "$(gettext 'New button')" --no-buttons --infobox "\n     $(gettext "$BUTTONEXEC is already selected!")     \n" 0 0 3000 &
+	fi
+}
+export -f button_add
+
+#change sequence of tray buttons
+button_moveup()
+{	
+	TRAYBUTTON=$(cat /tmp/traybutton_selected)
+	TRAYBUTTON=$(grep -aF -- "$TRAYBUTTON" $JWM_HOME/$jwmtray)
+	LINE_BEFORE=$(grep -aF -B1 -- "$TRAYBUTTON" $JWM_HOME/$jwmtray 2>/dev/null | grep -aFv -- "$TRAYBUTTON" | grep -a -- "<TrayButton popup")
+	if [ "$LINE_BEFORE" ]; then
+	 cat $JWM_HOME/$jwmtray > /tmp/tmp
+	 grep -aF -B1000 -- "$TRAYBUTTON" 2>/dev/null $JWM_HOME/$jwmtray | grep -aFv -- "$TRAYBUTTON" | grep -aFv -- "$LINE_BEFORE" > /tmp/tmp1
+	 grep -aF -A1000 -- "$TRAYBUTTON" 2>/dev/null $JWM_HOME/$jwmtray | grep -aFv -- "$TRAYBUTTON" > /tmp/tmp2
+	 echo "$TRAYBUTTON" >> /tmp/tmp1
+	 echo "$LINE_BEFORE" >> /tmp/tmp1
+	 cat /tmp/tmp2 >> /tmp/tmp1
+	 mv -f /tmp/tmp1 $JWM_HOME/$jwmtray 
+	 cp -r $JWM_HOME/$jwmtray /var/local/sss/root/
+	fi
+}
+export -f button_moveup
+
+button_movedown()
+{	
+	TRAYBUTTON=$(cat /tmp/traybutton_selected)
+	TRAYBUTTON=$(grep -aF -- "$TRAYBUTTON" $JWM_HOME/$jwmtray)
+	LINE_AFTER=$(grep -aF -A1 -- "$TRAYBUTTON" $JWM_HOME/$jwmtray 2>/dev/null | grep -aFv -- "$TRAYBUTTON" | grep -a -- "<TrayButton popup")
+	if [ "$LINE_AFTER" ]; then
+	 cat $JWM_HOME/$jwmtray > /tmp/tmp
+	 grep -aF -B1000 -- "$TRAYBUTTON" 2>/dev/null $JWM_HOME/$jwmtray | grep -aFv -- "$TRAYBUTTON" > /tmp/tmp1
+	 grep -aF -A1000 -- "$TRAYBUTTON" 2>/dev/null $JWM_HOME/$jwmtray | grep -aFv -- "$TRAYBUTTON" | grep -aFv -- "$LINE_AFTER" > /tmp/tmp2
+	 echo "$LINE_AFTER" >> /tmp/tmp1
+	 echo "$TRAYBUTTON" >> /tmp/tmp1
+	 cat /tmp/tmp2 >> /tmp/tmp1
+	 mv -f /tmp/tmp1 $JWM_HOME/$jwmtray 
+	 cp -r $JWM_HOME/$jwmtray /var/local/sss/root/
+	fi
+}
+export -f button_movedown
+
+###############################################################################
+#
+# Options tab
+#
+###############################################################################
+
+#define launchbar presets
+LAUNCHBAR_PRESET=$(cat $PREFDIR/launchbar_preset 2>/dev/null)
+if [ ! "$LAUNCHBAR_PRESET" ]; then
+ LAUNCHBAR_PRESET="2" && echo "2" > $PREFDIR/launchbar_preset
+fi
+
+#define initial sensitive state of launchbar presets
+ACCESSORY_PANEL=$(cat $PREFDIR/accessory_tray 2>/dev/null)
+[ ! "$ACCESSORY_PANEL" ] && ACCESSORY_PANEL='false'
+[ "$ACCESSORY_PANEL" = "true" ] && LPSTATE="true" || LPSTATE="false"
+
+#define launchbar status
+launchbar()
+{
+	ACCESSORY_PANEL=$(cat $PREFDIR/accessory_tray 2>/dev/null)
+	[ ! "$ACCESSORY_PANEL" ] && ACCESSORY_PANEL="false"
+	if [ "$ACCESSORY_PANEL" = "true" ]; then #accessory panel enabled
+	 if [ -d /usr/local/jwm_config* ]; then
+	  if [ ! "`grep -aF -- '<Include>/root/.jwm/jwmrc-tray2</Include>' /etc/xdg/templates/_root_.jwmrc`" ]; then
+	   sed -i -e '/<Include>\/root\/\.jwm\/jwmrc-tray1<\/Include>/a \<Include>\/root\/\.jwm\/jwmrc-tray2<\/Include>' /etc/xdg/templates/_root_.jwmrc
+	  fi
+	 else
+	  if [ ! "`grep -aF -- '<Include>/root/.jwmrc-tray2</Include>' /etc/xdg/templates/_root_.jwmrc`" ]; then
+	   sed -i -e '/<\/JWM>/i \<Include>\/root\/\.jwmrc-tray2<\/Include>' /etc/xdg/templates/_root_.jwmrc
+	  fi
+	 fi
+
+	 #find installed applications
+	 [ -f /usr/local/bin/roxfiler ] && [ ! "`which rox`" ] && ln -sf /usr/local/bin/roxfiler /usr/bin/rox
+	 for f in defaultfilemanager pcmanfm Thunar spacefm xfe roxfiler rox; do [ "`which $f 2>/dev/null`" ] && { FILE="$f"; break; } done
+	 for c in defaultterminal lxterminal mrxvt konsole roxterm sakura Terminal terminal termit urxvt rxvt aterm xterm; do [ "`which $c 2>/dev/null`" ] && { CONSOLE="$c"; break; } done
+	 for p in defaultprocessmanager lxtask htop pprocess top; do [ "`which $p 2>/dev/null`" ] && { PROCESS="$p"; break; } done
+	 [ "$PROCESS" = "htop" ] && PROCESS="urxvt -e htop"
+	 [ "$PROCESS" = "top" ] && PROCESS="urxvt -e top"
+	 [ "`which dotpup 2>/dev/null`" ] && INSTALL="dotpup" || INSTALL="/usr/local/petget/pkg_chooser.sh"
+	 if [ "`which logout_gui 2>/dev/null`" ]; then
+	  BUTTON_OPTION="<TrayButton popup=\"Exit\" icon=\"/usr/local/lib/X11/pixmaps/shutdown48.png\">exec:/usr/sbin/logout_gui</TrayButton>"
+	 elif [ "`which PupShutdown 2>/dev/null`" ]; then
+	  BUTTON_OPTION="<TrayButton popup=\"Exit\" icon=\"/usr/local/PupShutdown/icons/shutdown48.png\">exec:PupShutdown</TrayButton>"
+	 elif [ "`which hardinfo 2>/dev/null`" ]; then
+	  BUTTON_OPTION="<TrayButton popup=\"SysInfo\" icon=\"hardinfo.png\">exec:hardinfo</TrayButton>"
+	 else
+	  BUTTON_OPTION=""
+	 fi
+	 OSMO=$(grep -aFw 'osmo' /usr/local/bin/defaultcalendar 2>/dev/null)
+	 [ "$OSMO" ] && DEFAULTCALENDAR="killall osmo ; osmo" || DEFAULTCALENDAR="defaultcalendar"
+
+	 #find properties of current accessory tray (if it exists)
+	 if [ -d /usr/local/jwm_config* ]; then
+	  LAUNCHBAR=".jwm/jwmrc-tray2"
+	  if [ "`grep -aE -- '<Dock|Dock>' $HOME/.jwm/jwmrc-tray 2>/dev/null`" ] && [ -s $HOME/.jwm/jwmrc-tray1 ]; then
+	   cp -f $HOME/.jwm/jwmrc-tray1 /tmp/tmp
+	   mv -f $HOME/.jwm/jwmrc-tray2 $HOME/.jwm/jwmrc-tray1 # assure primary tray is jwmrc-tray1
+	   mv -f /tmp/tmp $HOME/.jwm/jwmrc-tray2
+	  fi
+	 else
+	  LAUNCHBAR=".jwmrc-tray2"
+	 fi
+	 if [ -f $HOME/.jwmrc-tray2 -o -f $HOME/.jwm/jwmrc-tray2 ]; then #current accessory tray
+	  AUTOHIDE=$(grep -aFi -- '<Tray ' $HOME/$LAUNCHBAR | grep -a -om1 -- " autohide=.* " | cut -d'"' -f2)
+	  if [ ! "$AUTOHIDE" ]; then
+	   AUTOHIDE="off"
+	   if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then
+	    if ((`bc <<< "$JWM_VER<=1024"`)); then
+	     AUTOHIDE="false"
+	    fi
+	   elif [ "`echo "$JWM_VER" | grep -aE '^1|^2\.[0-2]' 2>/dev/null`" ]; then
+	    AUTOHIDE="false"
+	   fi
+	  fi
+	  TRAY_LAYOUT=$(grep -aFi -- '<Tray ' $HOME/$LAUNCHBAR | grep -a -om1 -- " layout=.* " | cut -d'"' -f2)
+	  [ ! "$TRAY_LAYOUT" ] && TRAY_LAYOUT="horizontal"
+	  if [ "$TRAY_LAYOUT" = "vertical" ]; then
+	   TRAY_WIDTH=$(grep -aFi -- '<Tray ' $HOME/$LAUNCHBAR | grep -a -om1 -- " width=.* " | cut -d'"' -f2) TRAY_HEIGHT="0"
+	   [ ! "$TRAY_WIDTH" ] && TRAY_WIDTH="44" TRAY_HEIGHT="0"
+	  elif [ "$TRAY_LAYOUT" = "horizontal" ]; then
+	   TRAY_HEIGHT=$(grep -aFi -- '<Tray ' $HOME/$LAUNCHBAR | grep -a -om1 -- " height=.* " | cut -d'"' -f2) TRAY_WIDTH="0"
+	   [ ! "$TRAY_HEIGHT" ] && TRAY_HEIGHT="44" TRAY_WIDTH="0"
+	  fi
+	  HALIGN=$(grep -aFi -- '<Tray ' $HOME/$LAUNCHBAR | grep -a -om1 -- " halign=.* " | cut -d'"' -f2)
+	  [ ! "$HALIGN" ] && HALIGN="center"
+	  VALIGN=$(grep -aFi -- '<Tray ' $HOME/$LAUNCHBAR | grep -a -om1 -- " valign=.* " | cut -d'"' -f2)
+	  [ ! "$VALIGN" ] && VALIGN="top"
+	  if [ -d /usr/local/jwm_config* ]; then
+	   VALIGN1=$(grep -aFi -- '<Tray ' $HOME/.jwm/jwmrc-tray1 | grep -a -om1 -- " valign=.* " | cut -d'"' -f2)
+	   [ ! "$VALIGN1" ] && VALIGN1="bottom"
+	   [ "$VALIGN1" = "top" -o "$VALIGN1" = "center" ] && VALIGN="bottom"
+	   [ "$TRAY_LAYOUT" = "vertical" ] && VALIGN="center"
+	  fi
+	 else #no current accessory tray, so apply default tray parameters
+	  VALIGN="top"
+	  if [ -d /usr/local/jwm_config* ]; then
+	   VALIGN1=$(grep -aFi -- '<Tray ' $HOME/.jwm/jwmrc-tray1 | grep -a -om1 -- " valign=.* " | cut -d'"' -f2)
+	   [ ! "$VALIGN1" ] && VALIGN1="bottom"
+	   [ "$VALIGN1" = "top" -o "$VALIGN1" = "center" ] && VALIGN="bottom"
+	  else
+	   VALIGN1=$(grep -aFi -- '<Tray ' $HOME/jwmrc-tray | grep -a -om1 -- " valign=.* " | cut -d'"' -f2)
+	   [ ! "$VALIGN1" ] && VALIGN1="bottom"
+	   [ "$VALIGN1" = "top" -o "$VALIGN1" = "center" ] && VALIGN="bottom"
+	  fi
+	  AUTOHIDE="off"
+	  if [ "`jwm -v | head -n1 | grep -aE 'vgit|vsvn' 2>/dev/null`" ]; then
+	   if ((`bc <<< "$JWM_VER<=1024"`)); then
+	    AUTOHIDE="false"
+	   fi
+	  elif [ "`echo "$JWM_VER" | grep -aE '^1|^2\.[0-2]' 2>/dev/null`" ]; then
+	   AUTOHIDE="false"
+	  fi
+	  AUTOHIDE="$AUTOHIDE" TRAY_LAYOUT="horizontal" TRAY_WIDTH="0" TRAY_HEIGHT="44" HALIGN="center" VALIGN="$VALIGN"
+	 fi
+
+	 #check pc48.png (required for presets but missing in some icon packages)
+	 [ -f /usr/local/lib/X11/pixmaps/pc24.png ] && [ ! -f /usr/local/lib/X11/pixmaps/pc48.png ] && cp -f /usr/local/lib/X11/pixmaps/pc24.png /tmp/tmp && mv -f /tmp/tmp /usr/local/lib/X11/pixmaps/pc48.png
+
+	 #preset buttons
+	 LAUNCHBAR_PRESET=$(cat $PREFDIR/launchbar_preset 2>/dev/null)
+	 [ ! "$LAUNCHBAR_PRESET" ] && LAUNCHBAR_PRESET="2"
+	 HYBRID_STATE=`grep -aF -- 'hybrid</Include>' $HOME/$LAUNCHBAR 2>/dev/null` #check if existing tray set to hybrid autohide
+	 if [ "$LAUNCHBAR_PRESET" = "12" ]; then
+	  echo -e "<?xml version=\"1.0\"?>\n<JWM>\n	<Tray autohide=\"$AUTOHIDE\" insert=\"right\" x=\"0\" y=\"-1\" border=\"1\" width=\"$TRAY_WIDTH\" height=\"$TRAY_HEIGHT\" layer=\"above\" layout=\"$TRAY_LAYOUT\" halign=\"$HALIGN\" valign=\"$VALIGN\" >
+		<TrayButton popup=\"File\" icon=\"/usr/local/lib/X11/pixmaps/home48.png\">exec:$FILE</TrayButton>
+		<TrayButton popup=\"Setup\" icon=\"/usr/local/lib/X11/pixmaps/configuration48.png\">exec:wizardwizard</TrayButton>
+		<TrayButton popup=\"Console\" icon=\"/usr/local/lib/X11/pixmaps/console48.png\">exec:$CONSOLE</TrayButton>
+		<TrayButton popup=\"Process\" icon=\"/usr/local/lib/X11/pixmaps/pc48.png\">exec:$PROCESS</TrayButton>
+		<TrayButton popup=\"Edit\" icon=\"/usr/local/lib/X11/pixmaps/edit48.png\">exec:defaulttexteditor</TrayButton>
+		<TrayButton popup=\"Write\" icon=\"/usr/local/lib/X11/pixmaps/word48.png\">exec:defaultwordprocessor</TrayButton>
+		<TrayButton popup=\"Calc\" icon=\"/usr/local/lib/X11/pixmaps/spread48.png\">exec:defaultspreadsheet</TrayButton>
+		<TrayButton popup=\"Paint\" icon=\"/usr/local/lib/X11/pixmaps/paint48.png\">exec:defaultpaint</TrayButton>
+		<TrayButton popup=\"Browse\" icon=\"/usr/local/lib/X11/pixmaps/www48.png\">exec:defaultbrowser</TrayButton>
+		<TrayButton popup=\"Play\" icon=\"/usr/local/lib/X11/pixmaps/multimedia48.png\">exec:defaultmediaplayer</TrayButton>
+		$BUTTON_OPTION
+		<TrayButton popup=\"JWMdesk\" icon=\"/usr/local/jwmdesk/icons/jwmdesk64.png\">exec:jwmdesk</TrayButton>\n	</Tray>\n</JWM>" > $HOME/$LAUNCHBAR
+	 elif [ "$LAUNCHBAR_PRESET" = "18" ]; then
+	  echo -e "<?xml version=\"1.0\"?>\n<JWM>\n	<Tray autohide=\"$AUTOHIDE\" insert=\"right\" x=\"0\" y=\"-1\" border=\"1\" width=\"$TRAY_WIDTH\" height=\"$TRAY_HEIGHT\" layer=\"above\" layout=\"$TRAY_LAYOUT\" halign=\"$HALIGN\" valign=\"$VALIGN\" >
+		<TrayButton popup=\"File\" icon=\"/usr/local/lib/X11/pixmaps/home48.png\">exec:$FILE</TrayButton>
+		<TrayButton popup=\"Mount\" icon=\"/usr/local/lib/X11/pixmaps/drive48.png\">exec:pmount</TrayButton>
+		<TrayButton popup=\"Install\" icon=\"/usr/local/lib/X11/pixmaps/pet48.png\">exec:$INSTALL</TrayButton>
+		<TrayButton popup=\"Setup\" icon=\"/usr/local/lib/X11/pixmaps/configuration48.png\">exec:wizardwizard</TrayButton>
+		<TrayButton popup=\"Console\" icon=\"/usr/local/lib/X11/pixmaps/console48.png\">exec:$CONSOLE</TrayButton>
+		<TrayButton popup=\"Process\" icon=\"/usr/local/lib/X11/pixmaps/pc48.png\">exec:$PROCESS</TrayButton>
+		<TrayButton popup=\"Edit\" icon=\"/usr/local/lib/X11/pixmaps/edit48.png\">exec:defaulttexteditor</TrayButton>
+		<TrayButton popup=\"Write\" icon=\"/usr/local/lib/X11/pixmaps/word48.png\">exec:defaultwordprocessor</TrayButton>
+		<TrayButton popup=\"Calc\" icon=\"/usr/local/lib/X11/pixmaps/spread48.png\">exec:defaultspreadsheet</TrayButton>
+		<TrayButton popup=\"Paint\" icon=\"/usr/local/lib/X11/pixmaps/paint48.png\">exec:defaultpaint</TrayButton>
+		<TrayButton popup=\"Browse\" icon=\"/usr/local/lib/X11/pixmaps/www48.png\">exec:defaultbrowser</TrayButton>
+		<TrayButton popup=\"Email\" icon=\"/usr/local/lib/X11/pixmaps/email48.png\">exec:defaultemail</TrayButton>
+		<TrayButton popup=\"Chat\" icon=\"/usr/local/lib/X11/pixmaps/chat48.png\">exec:defaultchat</TrayButton>
+		<TrayButton popup=\"Connect\" icon=\"/usr/local/lib/X11/pixmaps/connect48.png\">exec:defaultconnect</TrayButton>
+		<TrayButton popup=\"Plan\" icon=\"/usr/local/lib/X11/pixmaps/date48.png\">exec:$DEFAULTCALENDAR</TrayButton>
+		<TrayButton popup=\"Play\" icon=\"/usr/local/lib/X11/pixmaps/multimedia48.png\">exec:defaultmediaplayer</TrayButton>
+		$BUTTON_OPTION
+		<TrayButton popup=\"JWMdesk\" icon=\"/usr/local/jwmdesk/icons/jwmdesk64.png\">exec:jwmdesk</TrayButton>\n	</Tray>\n</JWM>" > $HOME/$LAUNCHBAR
+	 else
+	  echo -e "<?xml version=\"1.0\"?>\n<JWM>\n	<Tray autohide=\"$AUTOHIDE\" insert=\"right\" x=\"0\" y=\"-1\" border=\"1\" width=\"$TRAY_WIDTH\" height=\"$TRAY_HEIGHT\" layer=\"above\" layout=\"$TRAY_LAYOUT\" halign=\"$HALIGN\" valign=\"$VALIGN\" >
+		<TrayButton popup=\"Setup\" icon=\"/usr/local/lib/X11/pixmaps/configuration48.png\">exec:wizardwizard</TrayButton>
+		<TrayButton popup=\"JWMdesk\" icon=\"/usr/local/jwmdesk/icons/jwmdesk64.png\">exec:jwmdesk</TrayButton>\n	</Tray>\n</JWM>" > $HOME/$LAUNCHBAR
+	 fi
+
+	 #if prior existing tray set to hybrid autohide, then apply same state to new preset tray
+	 if [ "$HYBRID_STATE" ]; then
+	  [ -d /usr/local/jwm_config* ] && sed -i -e "/<JWM>/a \	<Include>/root/.jwm/"jwmrc-tray2"_hybrid</Include>" $HOME/$LAUNCHBAR || sed -i -e "/<JWM>/a \	<Include>/root/".jwmrc-tray2"_hybrid</Include>" $HOME/$LAUNCHBAR
+	  grep -aFv -- '_hybrid</Include>' $HOME/$LAUNCHBAR | sed -e 's%autohide="\(top\|bottom\|left\|right\)"%autohide="off"%' -e "s%layer=\"above\"%layer=\"below\"%" | sed -e 's/^[ \t]*//' > "$HOME/$LAUNCHBAR"_hybrid
+	 fi
+
+	 #define default tray and baseline launchbar presets
+	 echo "jwmrc-tray2" > $PREFDIR/default_tray
+	 echo "2" > $PREFDIR/launchbar_preset
+
+	else #accessory panel disabled 
+	 if [ -d /usr/local/jwm_config* ]; then
+	  echo -e "<JWM>\n\n</JWM>" > $HOME/.jwm/jwmrc-tray2
+	  [ -f $HOME/.jwm/jwmrc-tray*_hybrid ] && rm -f $HOME/.jwm/jwmrc-tray*_hybrid
+	  echo "jwmrc-tray1" > $PREFDIR/default_tray
+	  echo "2" > $PREFDIR/launchbar_preset
+	 else
+	  sed -i '/\/root\/\.jwmrc-tray2<\/Include>/d' /etc/xdg/templates/_root_.jwmrc
+	  [ -f $HOME/.jwmrc-tray2 ] && rm -f $HOME/.jwmrc-tray2
+	  [ -f $HOME/.jwm/jwmrc-tray*_hybrid ] && rm -f $HOME/.jwm/jwmrc-tray*_hybrid
+	  echo "jwmrc-tray1" > $PREFDIR/default_tray
+	  echo "2" > $PREFDIR/launchbar_preset
+	 fi
+	fi
+
+	#update launch bar
+	if [ "`which gtkdialog-splash 2>/dev/null`" ]; then
+	 gtkdialog-splash -close never -timeout 2 -margin 8 -fontsize large -bg goldenrod -text " $(gettext 'Actualizando...') " &
+	else
+	 Xdialog --title "" --no-buttons --infobox "\n        $(gettext 'Updating...')        \n" 0 0 2000 &
+	fi
+	$WORKDIR/fixmenus
+	jwm -restart
+	sleep 1
+	jwmdesk 2>/dev/null &
+}
+export -f launchbar
+
+#Current Themes
+ currentthemes (){
+ CURRENT_WALLPAPER=$(cat $HOME/.config/wallpaper/bg_img 2>/dev/null | awk -F'/' '{print $NF}')
+ [ ! "$CURRENT_WALLPAPER" ] && CURRENT_WALLPAPER="NA"
+ CURRENT_GTKTHEME=$(grep -a '^include "/usr/share/themes' $HOME/.gtkrc-2.0 2>/dev/null | sed -e 's/include \"\/usr\/share\/themes\///' -e 's/\/gtk-2.0\/gtkrc\"//')
+ [ ! "$CURRENT_GTKTHEME" ] && CURRENT_GTKTHEME="NA"
+ if [ -d /usr/local/jwm_config* ]; then
+  CURRENT_JWMPRESET=$(cat $HOME/.jwm/tray_active_preset 2>/dev/null)
+  JWMTHEME="$(gettext 'Tray Theme'):"
+ else
+  CURRENT_JWMPRESET=$(cat $HOME/.jwm/theme 2>/dev/null)
+  JWMTHEME="$(gettext 'JWM Theme'):"
+ fi
+ [ ! "$CURRENT_JWMPRESET" ] && CURRENT_JWMPRESET="NA"
+ CURRENT_ICONTHEME=$(cat /etc/desktop_icon_theme 2>/dev/null)
+ [ ! "$CURRENT_ICONTHEME" ] && CURRENT_ICONTHEME="NA"
+ CURRENT_CURSORTHEME=$(readlink $HOME/.icons/default | rev | cut -d '/' -f1 | rev)
+ [ ! "$CURRENT_CURSORTHEME" ] && CURRENT_CURSORTHEME="Default"
+
+ export CURRENT_THEMES="
+ <window title=\"$(gettext 'Tema')\" icon-name=\"jwmdesk64\" resizable=\"false\" window-position=\"2\">
+ <vbox>
+  <text height-request=\"3\"><label>\"\"</label></text>
+  <hbox>
+   <vbox>
+    <text xalign=\"0\" wrap=\"false\" use-markup=\"true\"><label>\"<b><span size='"'medium'"'>   $(gettext 'Fondo de pantalla'):</span></b>\"</label></text>
+    <text xalign=\"0\" wrap=\"false\" use-markup=\"true\"><label>\"<b><span size='"'medium'"'>   $(gettext 'Tema GTK'):</span></b>\"</label></text>
+    <text xalign=\"0\" wrap=\"false\" use-markup=\"true\"><label>\"<b><span size='"'medium'"'>   $JWMTHEME</span></b>\"</label></text>
+    <text xalign=\"0\" wrap=\"false\" use-markup=\"true\"><label>\"<b><span size='"'medium'"'>   $(gettext 'Iconos'):</span></b>\"</label></text>
+    <text xalign=\"0\" wrap=\"false\" use-markup=\"true\"><label>\"<b><span size='"'medium'"'>   $(gettext 'Cursor'):</span></b>\"</label></text>
+   </vbox>
+   <vbox>
+    <text xalign=\"0\" wrap=\"false\"><label>\"  $CURRENT_WALLPAPER   \"</label></text>
+    <text xalign=\"0\" wrap=\"false\"><label>\"  $CURRENT_GTKTHEME   \"</label></text>
+    <text xalign=\"0\" wrap=\"false\"><label>\"  $CURRENT_JWMPRESET   \"</label></text>
+    <text xalign=\"0\" wrap=\"false\"><label>\"  $CURRENT_ICONTHEME   \"</label></text>
+    <text xalign=\"0\" wrap=\"false\"><label>\"  $CURRENT_CURSORTHEME   \"</label></text>
+   </vbox>
+  </hbox>
+  <text height-request=\"3\"><label>\"\"</label></text>
+  <hseparator></hseparator>
+  <hbox homogeneous=\"true\">
+   <button width-request=\"90\">
+    <label>\"$(gettext 'Close')\"</label>
+    <action type=\"exit\">quit_now</action>
+   </button>
+  </hbox>
+ </vbox>
+ </window>"
+ $GTKDIALOG -p CURRENT_THEMES
+ unset CURRENT_THEMES
+ }
+ export -f currentthemes
+
+#Current Themes and Global Themes
+if [ ! -d /usr/local/jwm_config* ]; then #legacy JWM desktop
+ CURRENT_THEMES='
+   <text space-expand="true" space-fill="true" height-request="40"><label>""</label></text>
+   <text space-expand="false" space-fill="false" use-markup="true"><label>"<b><big>'$(gettext 'Tema del Escritorio')'</big></b>"</label></text>
+   <hbox homogeneous="true">
+    <button width-request="161" image-position="0" tooltip-text=" '$(gettext 'View current desktop themes')' ">
+     <label>'$(gettext 'Ver')'</label>
+     <input file>'$ICONDIR'/view.svg</input><height>20</height><width>20</width>
+     <action>currentthemes &</action>
+    </button>
+   </hbox>
+   <text height-request="12"><label>""</label></text>'
+ GLOBALTHEMES=''
+ GLOBALTHEME_ITEMS=''
+ GLOBAL=''
+else #jwm_config desktop
+ globaltheme (){
+ [ "$GLOBALTHEME" = "$(gettext 'Select...')" ] && Xdialog --title "$(gettext 'Alert')" --beep --msgbox "\n  $(gettext 'Please select a global theme!')  \n" 0 0 && jwmdesk && exit 1
+ [ "$GLOBALTHEME" ] && echo "$GLOBALTHEME" > $WORKDIR/global_theme
+ mkdir -p "$HOME/.jwm/tmp/"
+ cp -f /usr/sbin/ptheme /tmp/ptheme
+ chmod 755 /tmp/ptheme
+ sed -i 's/^.*\/usr\/local\/jwm_config\/jwm_restart.*$/jwm -restart/' /tmp/ptheme
+ /tmp/ptheme -p "$GLOBALTHEME" > /dev/null 2>&1
+ killall yaf-splash 2>/dev/null
+ touch $HOME/.jwm/tmp/bookmark_list $HOME/.jwm/tmp/bookmark_list2 $HOME/.jwm/tmp/bookmark_list3
+ [ ! -s $HOME/.jwm/jwmrc-tray3 ] && echo -e "<JWM>\n\n</JWM>" > $HOME/.jwm/jwmrc-tray3
+ [ ! -s $HOME/.jwm/jwmrc-tray4 ] && echo -e "<JWM>\n\n</JWM>" > $HOME/.jwm/jwmrc-tray4
+ echo -e "<JWM>\n\n</JWM>" > $HOME/.jwm/jwmrc-tray5
+ echo -e "<JWM>\n\n</JWM>" > $HOME/.jwm/jwmrc-tray6
+ echo -e "<JWM>\n\n</JWM>" > $HOME/.jwm/jwmrc-tray7
+ echo -e "<JWM>\n\n</JWM>" > $HOME/.jwm/jwmrc-tray8
+ if [ "`grep -aE -- '<Dock|Dock>' $HOME/.jwm/jwmrc-tray2 2>/dev/null`" ]; then
+  mv -f $HOME/.jwm/jwmrc-tray2 $HOME/.jwm/jwmrc-tray1 # assure primary tray is jwmrc-tray1
+ fi
+ HALIGN=$(grep -aFi -- '<Tray ' $HOME/.jwm/jwmrc-tray1 | grep -a -om1 -- " halign=.* " | cut -d'"' -f2)
+ [ "$HALIGN" = "center" ] && sed -i 's/halign="center"/halign="left"/' $HOME/.jwm/jwmrc-tray1
+ grep -aEv -- '<!--[[:blank:]]*<TrayButton' $HOME/.jwm/jwmrc-tray1 | sed '/^$/d' > /tmp/tray1
+ grep -aE -- '<?xml|<JWM>|<RestartCommand|<Include|<Tray |Additional TrayButton' /tmp/tray1 > /tmp/tmp1
+ grep -aF -- '<TrayButton label' /tmp/tray1 > /tmp/tmp2
+ grep -aF -- '<TrayButton popup' /tmp/tray1 > /tmp/tmp3
+ grep -aEv -- '<?xml|<JWM>|<RestartCommand|<Include|<Tray |Additional TrayButton|<TrayButton label|<TrayButton popup|<Spacer width="0"|<!--' /tmp/tray1 > /tmp/tmp4
+ cat /tmp/tmp1 > /tmp/tray1 # format head of jwmrc-tray1
+ cat /tmp/tmp2 | uniq >> /tmp/tray1 # add menu label(s) to jwmrc-tray1
+ echo "<Spacer width=\"10\" height=\"20\"></Spacer>" >> /tmp/tray1 # add spacer after menu label(s)
+ cat /tmp/tmp3 | awk '!a[$0]++' | awk -F'c:' '!seen[$2]++' >> /tmp/tray1 # concatenate button launchers to left/top side of tray; remove lines with duplicate executables
+ cat /tmp/tmp4 | uniq >> /tmp/tray1 # append tail of jwmrc-tray1
+ sed -i -e 's/^[ \t]*//' /tmp/tray1 # remove jwmrc-tray1 text-indentation
+ mv -f /tmp/tray1 $HOME/.jwm/jwmrc-tray1
+ echo -e "<JWM>\n\n</JWM>" > $HOME/.jwm/jwmrc-tray2 # set accessory tray off by default
+ [ -f $HOME/.jwm/jwmrc-tray*_hybrid ] && rm -f $HOME/.jwm/jwmrc-tray*_hybrid
+ echo "false" > $PREFDIR/accessory_tray
+ echo "jwmrc-tray1" > $PREFDIR/default_tray
+ echo "2" > $PREFDIR/launchbar_preset
+ jwm -restart
+ jwmdesk &
+ }
+ export -f globaltheme
+
+ CURRENT_THEMES=''
+ GLOBALTHEME=$(cat $WORKDIR/global_theme 2>/dev/null)
+ [ ! "$GLOBALTHEME" ] && GLOBALTHEME="$(gettext 'Select...')"
+ GLOBALTHEMES=$(find /usr/share/ptheme/globals -mindepth 1 -maxdepth 1 -type f -printf "%f\n" | grep -av null | sort)
+ GLOBALTHEME_ITEMS=$(find /usr/share/ptheme/globals -mindepth 1 -maxdepth 1 -type f -printf "<item>%f</item>\n" | grep -av null | sort)
+ GLOBAL='
+   <text space-expand="true" space-fill="true" height-request="25"><label>""</label></text>
+   <text space-expand="false" space-fill="false" use-markup="true"><label>"<b><big>'$(gettext 'Global Themes')'</big></b>"</label></text> 
+   <hbox space-expand="false" space-fill="false" homogeneous="true">
+    <comboboxentry width-request="161" wrap-width="1" tooltip-text=" '$(gettext 'Select a new global desktop theme. 
+ The accessory tray is off by default.')' ">
+     <variable>GLOBALTHEME</variable>
+     <input>$GLOBALTHEMES</input>
+     <default>'`echo $GLOBALTHEME`'</default>
+     '$GLOBALTHEME_ITEMS'
+    </comboboxentry>
+   </hbox>
+    <pixmap><input file>'$ICONDIR/blank1.png'</input></pixmap>
+   <hbox homogeneous="true">
+    <button width-request="161" image-position="0" tooltip-text=" '$(gettext 'Apply selected global theme')' ">
+     <label>'$(gettext 'Apply')'</label>
+     <input file>'$ICONDIR'/apply.svg</input><height>20</height><width>20</width>
+     <action>globaltheme &</action>
+     <action>exit:quit_now</action>
+    </button>
+   </hbox>
+    <pixmap><input file>'$ICONDIR/blank1.png'</input></pixmap>
+   <hbox homogeneous="true">
+    <button width-request="161" image-position="0" tooltip-text=" '$(gettext 'View current desktop themes')' ">
+     <label>'$(gettext 'View')'</label>
+     <input file>'$ICONDIR'/view.svg</input><height>20</height><width>20</width>
+     <action>currentthemes &</action>
+    </button>
+   </hbox>'
+fi
+
+#gui of Options tab
+OPTIONS='
+  <vbox space-expand="true" space-fill="true" margin="5">
+   <text height-request="10"><label>""</label></text>
+   <text space-expand="false" space-fill="false" use-markup="true"><label>"<b><big>'$(gettext 'Tamaño de JWMdesk')'</big></b>"</label></text> 
+   <hbox space-expand="false" space-fill="false" homogeneous="true">
+    <spinbutton editable="false" width-request="161" range-min="300" range-max="700" range-step="5" range-value="500" tooltip-text=" '$(gettext 'Opening size of JWMdesk  (Default:500px)')' ">
+      <variable>WINDOW_WIDTH</variable>
+      <input>echo '$WINDOW_WIDTH'</input>
+      <action>echo "$WINDOW_WIDTH" > '$PREFDIR'/window_width</action>
+    </spinbutton>
+   </hbox>
+    <pixmap><input file>'$ICONDIR/blank1.png'</input></pixmap>
+   <hbox space-expand="false" space-fill="false" homogeneous="true">
+    <button width-request="161" tooltip-text=" '$(gettext 'Aplicar el tamaño seleccionado')' ">
+     <label>'$(gettext 'Aplicar')' </label>
+     <input file>'$ICONDIR'/apply.svg</input><height>20</height><width>20</width>
+     <action>jwmdesk &</action>
+     <action>exit:quit_now</action>
+    </button>
+   </hbox>
+  '$GLOBAL'
+  '$CURRENT_THEMES'
+   <text space-expand="true" space-fill="true" height-request="25"><label>""</label></text>
+   <text space-expand="false" space-fill="false" use-markup="true"><label>"<b><big>'$(gettext 'Panel de accesorios')'</big></b>"</label></text>
+   <hbox space-expand="false" space-fill="false" homogeneous="true">
+    <checkbox tooltip-text=" '$(gettext 'Activar/Desactivar el panel de inicio')' ">
+      <label>'$(gettext 'Panel de Apps')'</label>
+      <variable>ACCESSORY_PANEL</variable>
+      <default>'`echo $ACCESSORY_PANEL`'</default>
+      <action>if true echo true > '$PREFDIR'/accessory_tray</action>
+      <action>if false echo false > '$PREFDIR'/accessory_tray</action>
+      <action>if true enable:LAUNCHBAR_PRESET</action>
+      <action>if false disable:LAUNCHBAR_PRESET</action>
+    </checkbox>
+   </hbox>
+   <hbox homogeneous="true">
+   <vbox>
+   <text><label>'$(gettext 'Botones preestablecidos:')'</label></text>
+    <comboboxentry sensitive="'$LPSTATE'" width-request="161" tooltip-text=" '$(gettext 'Botones preestablecidos en la barra de inicio (Predeterminado:2)')' ">
+     <variable>LAUNCHBAR_PRESET</variable>
+     <default>'$(gettext 'Seleccionar...')'</default>
+     <item>2</item>
+     <item>12</item>
+     <item>18</item>
+     <action>echo "$LAUNCHBAR_PRESET" > '$PREFDIR'/launchbar_preset</action>
+    </comboboxentry>
+   </vbox>
+   </hbox>
+    <pixmap><input file>'$ICONDIR/blank1.png'</input></pixmap>
+   <hbox homogeneous="true">
+    <button width-request="161" tooltip-text=" '$(gettext 'Apply selected launch bar')' ">
+     <label>'$(gettext 'Aplicar')' </label>
+     <input file>'$ICONDIR'/apply.svg</input><height>20</height><width>20</width>
+     <action>touch /tmp/jwmdesk-page</action>
+     <action>launchbar &</action>
+     <action>exit:quit_now</action>
+    </button>
+   </hbox>
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+   <pixmap space-expand="true" space-fill="true"><input file>'$ICONDIR'/blank1.png</input></pixmap>
+  </vbox>'
+
+###############################################################################
+#
+# Profiles tab
+#
+###############################################################################
+
+#save/restore configuration files
+savejwmrc_personal()
+{
+	cp -f $HOME/.jwm/jwmrc-personal $HOME/.jwm/jwmrc-personal-bak
+	Xdialog --title "$(gettext 'Guardar')" --no-buttons --infobox "\n jwmrc-personal \n\n $(gettext 'guardado en') \n\n $HOME/.jwm/jwmrc-personal-bak \n" 0 0 5000 &
+}
+export -f savejwmrc_personal
+
+savejwmrc_tray()
+{
+	if [ -d /usr/local/jwm_config* ]; then
+	 [ ! -d $JWM_HOME/backup/ ] && mkdir -p "$JWM_HOME/backup/"
+	 cp -f $JWM_HOME/$jwmtray $JWM_HOME/backup/$jwmtray
+	 Xdialog --title "$(gettext 'Guardar')" --no-buttons --infobox "\n ${jwmtray} \n\n $(gettext 'guardado en') \n\n $JWM_HOME/backup/$jwmtray \n" 0 0 5000 &
+	else
+	 cp -f $JWM_HOME/$jwmtray $JWM_HOME/$jwmtray-bak
+	 Xdialog --title "$(gettext 'Guardar')" --no-buttons --infobox "\n ${jwmtray#.} \n\n $(gettext 'guardado en') \n\n $JWM_HOME/$jwmtray-bak \n" 0 0 5000 &
+	fi
+}
+export -f savejwmrc_tray
+
+restorejwmrc_personal()
+{
+	Xdialog --title "$(gettext 'Restaurar')" --cancel-label "No" --ok-label "Yes"  --yesno "\n $(gettext 'Restaurar') $HOME/.jwm/jwmrc-personal \n" 0 0
+	if [[ $? == 0 ]]; then
+	 cp -f $HOME/.jwm/jwmrc-personal-bak $HOME/.jwm/jwmrc-personal
+	 jwm -restart
+	 $WORKDIR/jwmdesk &
+	else
+	 $WORKDIR/jwmdesk &
+	fi
+}
+export -f restorejwmrc_personal
+
+restorejwmrc_tray()
+{
+	touch /tmp/jwmdesk-page
+	if [ -d /usr/local/jwm_config* ]; then
+	 Xdialog --title "$(gettext 'Restaurar')" --cancel-label "No" --ok-label "Yes"  --yesno "\n $(gettext 'Restaurar') $JWM_HOME/$jwmtray \n" 0 0
+	 if [[ $? == 0 ]]; then
+	  cp -f $JWM_HOME/backup/$jwmtray $JWM_HOME/$jwmtray
+	  jwm -restart
+	  $WORKDIR/jwmdesk &
+	 else
+	  $WORKDIR/jwmdesk &
+	 fi
+	else
+	 Xdialog --title "$(gettext 'Restaurar')" --cancel-label "No" --ok-label "Yes"  --yesno "\n $(gettext 'Restaurar') $JWM_HOME/$jwmtray \n" 0 0
+	 if [[ $? == 0 ]]; then
+	  cp -f $JWM_HOME/$jwmtray-bak $JWM_HOME/$jwmtray
+	  [ "$jwmtray" = ".jwmrc-tray2" ] && echo "2" > $PREFDIR/launchbar_preset
+	  jwm -restart
+	  $WORKDIR/jwmdesk &
+	 else
+	  $WORKDIR/jwmdesk &
+	 fi
+	fi
+}
+export -f restorejwmrc_tray
+
+###############################################################################
+#
+# Create the JWMdesk graphical interface
+#
+###############################################################################
+
+#help dialog
+jwmdesk_help()
+{
+export JWMDESK_HELP="
+<window title=\"JWMdesk - $(gettext 'Help')               JWM: $JWM_VER\" icon-name=\"jwmdesk64\" window-position=\"2\">
+ <notebook labels=\"$(gettext 'Acerca de')|$(gettext 'Licencia')\">
+  <frame>
+   <pixmap><input file>$ICONDIR/jwmdesk64.png</input><height>48</height><width>48</width></pixmap>
+   <text use-markup=\"true\"><label>\"<b><span size='"'x-large'"'>JWM</span><span size='"'x-large'"' color='"$COLOR"'>Desk</span> $VERSION</b>\"</label></text>
+   <text use-markup=\"true\"><label>\"<b>$(gettext 'JWM Desk Manager')</b>\"</label></text>
+   <text><label>\"$(gettext 'Copyright') (C) 2015-2019 Roger D. Grider\"</label></text>
+   <text height-request=\"10\"><label>\"\"</label></text>
+   <hbox homogeneous=\"true\">
+    <button width-request=\"170\">
+     <label>\"$(gettext 'Ayuda online')\"</label>
+     <action>defaultbrowser http://joewing.net/projects/jwm/ &</action>
+    </button>
+    <button width-request=\"170\">
+     <label>\"$(gettext 'Foro online')\"</label>
+     <action>defaulthtmlviewer http://murga-linux.com/puppy/viewtopic.php?p=869688#869688 &</action>
+    </button>
+   </hbox>
+  </frame>
+  <frame>
+   <text use-markup=\"true\"><label>\"$(gettext '<b>JWMdesk</b> es un software gratuito que puede redistribuir y/o modificar según los términos del <b>GNU General Public License</b> según lo publicado por la Free Software Foundation; ya sea GPLv3 o una versión posterior.')
+
+$(gettext 'Este programa se distribuye con la esperanza de que sea útil, pero') <b><span color='"'red'"'>$(gettext 'SIN NINGUNA GARANTÍA')</span></b>. $(gettext 'Consulte la página de la GNU General Public License a continuación para obtener información adicional.')\"</label></text>
+   <hbox homogeneous=\"true\">
+    <button>
+     <label>\"   http://www.gnu.org/licenses/   \"</label>
+     <action>defaulthtmlviewer http:\/\/www.gnu.org\/licenses\/ &</action>
+    </button>
+   </hbox>
+  </frame>
+ </notebook>
+</window>"
+$GTKDIALOG -p JWMDESK_HELP
+unset JWMDESK_HELP
+}
+export -f jwmdesk_help
+
+#main dialog
+if [ -f /tmp/jwmdesk-page ]; then #set active notebook page
+ NBPG='3'
+ rm -f /tmp/jwmdesk-page
+else
+ NBPG='0'
+fi
+
+export JWMDESK='
+<window title="JWMdesk" icon-name="jwmdesk64" resizable="true" window-position="1" default_height="'$WINDOW_HEIGHT'" default_width="'$WINDOW_WIDTH'">
+ <vbox>
+ <vbox space-expand="true" space-fill="true" scrollable="true" shadow-type="0" border-width="1">
+ <notebook page="'$NBPG'" space-expand="true" space-fill="true" labels=" '$(gettext 'Escritorio|Menu|Ventana|Panel|Bandeja|Opciones|Perfiles')' ">
+
+  <vbox margin="5" space-expand="true" space-fill="true">
+   <text use-markup="true"><label>"<b><big>'$(gettext 'Apariencia')'</big></b>"</label></text>
+   <hbox homogeneous="true" space-expand="true" space-fill="true">
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="100" width-request="140" tooltip-text=" '$(gettext 'Seleccionar el fondo de pantalla')' ">
+    <label>'$(gettext 'Fondo de pantalla')'</label>
+     <input file>'$ICONDIR'/wallpaper.svg</input><height>56</height><width>56</width>
+     <action>'$BACKGROUND_EXE' &</action>
+    </button>
+   </vbox>
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="100" width-request="140" tooltip-text=" '$GTKTHEME_TEXT' ">
+    <label>'$GTKTHEME_TITLE'</label>
+     <input file>'$ICONDIR'/wm_restart.svg</input><height>56</height><width>56</width>
+     <action>'$GTKTHEME_EXE' &</action>
+    </button>
+   </vbox>
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="100" width-request="140" tooltip-text=" '$(gettext 'Decoración de bordes de menú, panel y ventana')' ">
+    <label>'$(gettext 'Tema JWM')'</label>
+     <input file>'$ICONDIR'/windows.svg</input><height>56</height><width>56</width>
+     <action>. '$WORKDIR'/theme_switcher &</action>
+    </button>
+   </vbox>
+   </hbox>
+
+   <hbox homogeneous="true" space-expand="true" space-fill="true">
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="100" width-request="140" tooltip-text=" '$(gettext 'Seleccione el tema del icono para el escritorio y el menú')' ">
+    <label>'$(gettext 'Tema de inonos')'</label>
+     <input file>'$ICONDIR'/desktop_icons.svg</input><height>56</height><width>56</width>
+     <action>'$ICONSWITCHER_EXE' &</action>
+    </button>
+   </vbox>
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="100" width-request="140" tooltip-text=" '$(gettext 'Seleccionar el diseño de los iconos del escritorio')' ">
+    <label>'$(gettext 'Diseño de iconos')'</label>
+     <input file>'$ICONDIR'/desktop.svg</input><height>56</height><width>56</width>
+     <action>/usr/local/desksetup/desksetup.sh &</action>
+    </button>
+   </vbox>
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="100" width-request="140" tooltip-text=" '$(gettext 'Administrar iconos de unidades y eventos del clic')' ">
+    <label>'$(gettext 'Administrador de iconos')'</label>
+     <input file>'$ICONDIR'/harddisk.svg</input><height>56</height><width>56</width>
+     <action>'$DRIVEICONS_EXE' &</action>
+    </button>
+   </vbox>
+   </hbox>
+
+   <hbox homogeneous="true" space-expand="true" space-fill="true">
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="100" width-request="140" tooltip-text=" '$(gettext 'Seleccione el cursor de la pantalla del mouse/panel táctil')' ">
+    <label>'$(gettext 'Cursor del mouse')'</label>
+     <input file>'$ICONDIR'/mouse_cursor.svg</input><height>56</height><width>56</width>
+     <action>'$CURSOR_EXE' &</action>
+    </button>
+   </vbox>
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="100" width-request="140" tooltip-text=" '$(gettext 'Administrar atributos de fuente de pantalla')' ">
+    <label>'$(gettext 'Fuente de pantalla')'</label>
+     <input file>'$ICONDIR'/font.svg</input><height>56</height><width>56</width>
+     <action>'$FONT_EXE' &</action>
+    </button>
+   </vbox>
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="100" width-request="140" tooltip-text=" '$(gettext 'Administrar pantalla en blanco')' ">
+    <label>'$(gettext 'Apagar pantalla')'</label>
+     <input file>'$ICONDIR'/screen_blank.svg</input><height>56</height><width>56</width>
+     <action>'$SCREENSAVE_EXE' &</action>
+    </button>
+   </vbox>
+   </hbox>
+
+   <text use-markup="true"><label>"<b><big>'$(gettext 'Configuracion')'</big></b>"</label></text>
+   <hbox homogeneous="true" space-expand="true" space-fill="true">
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="100" width-request="140" tooltip-text=" '$(gettext 'Guía de configuración de Puppy')' ">
+    <label>'$(gettext 'Configuracion de Puppy')'</label>
+     <input file>'$ICONDIR'/preferences.svg</input><height>56</height><width>56</width>
+     <action>'$PUPPYSETUP_EXE' &</action>
+    </button>
+   </vbox>
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="100" width-request="140" tooltip-text=" '$(gettext 'Establecer atajos de teclado')' ">
+    <label>'$(gettext 'Atajos JWM')'</label>
+     <input file>'$ICONDIR'/keyboard_shortcut.svg</input><height>56</height><width>56</width>
+     <action>'$WORKDIR'/keyboard &</action>
+    </button>
+   </vbox>
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="100" width-request="140" tooltip-text=" '$(gettext 'Aplicaciones predeterminadas de Puppy')' ">
+    <label>'$(gettext 'Apps predeterminadas')'</label>
+     <input file>'$ICONDIR'/default_apps.svg</input><height>56</height><width>56</width>
+      '$DEFAULTS_EXE'
+    </button>
+   </vbox>
+   </hbox>
+  </vbox>
+
+
+
+  '$MENU'
+
+
+  <vbox space-expand="true" space-fill="true">
+   <vbox>
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext 'Geometría')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+   <hbox>
+    <checkbox tooltip-text=" '$(gettext 'Habilite a JWMdesk controlar la geometría de la ventana')' ">
+      <label>'$(gettext 'Habilitar')'</label>
+      <variable>WINDOW_GEOMETRY</variable>
+      <default>'`echo $WINDOW_GEOMETRY`'</default>
+      <action>if true echo true > '$PREFDIR'/window_geometry</action>
+      <action>if true enable:TITLEBAR_HEIGHT</action>
+      <action>if true enable:WINDOWBORDER_WIDTH</action>
+      <action>if true enable:WINDOWCORNER_RADIUS</action>
+      <action>if false echo false > '$PREFDIR'/window_geometry</action>
+      <action>if false echo 22 > '$TMPDIR'/titlebar_height</action>
+      <action>if false echo 4 > '$TMPDIR'/windowborder_width</action>
+      <action>if false echo 3 > '$TMPDIR'/windowcorner_radius</action>
+      <action>if false disable:TITLEBAR_HEIGHT</action>
+      <action>if false disable:WINDOWBORDER_WIDTH</action>
+      <action>if false disable:WINDOWCORNER_RADIUS</action>
+      <action>window_geometry</action>
+      <action>refresh:TITLEBAR_HEIGHT</action>
+      <action>refresh:WINDOWBORDER_WIDTH</action>
+      <action>refresh:WINDOWCORNER_RADIUS</action>
+    </checkbox>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+    <text><label>'$(gettext 'Altura de la barra del título')':</label></text>
+    <spinbutton sensitive="'$GSTATE'" editable="false" width-request="121" range-min="1" range-max="64" range-step="1" range-value="22" tooltip-text=" '$(gettext 'Rango:1-64px  Predeterminado:22px')' ">
+      <variable>TITLEBAR_HEIGHT</variable>
+      <input>cat '$TMPDIR'/titlebar_height</input>
+    </spinbutton>
+   </hbox>
+   <hbox>
+    <text><label>'$(gettext 'Ancho del borde')':  </label></text>
+    <spinbutton sensitive="'$GSTATE'" editable="false" width-request="121" range-min="1" range-max="64" range-step="1" range-value="4" tooltip-text=" '$(gettext 'Rango:1-64px  Predeterminado:4px')' ">
+      <variable>WINDOWBORDER_WIDTH</variable>
+      <input>cat '$TMPDIR'/windowborder_width</input>
+    </spinbutton>
+   </hbox>
+   '$CORNER_RADIUS'
+   </vbox>
+
+  '$WINDOWTHEME'
+
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+
+   <vbox space-expand="true" space-fill="true">
+   <hbox space-expand="false" space-fill="false">
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Foco')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+    <text><label>'$(gettext 'Click')' • '$(gettext 'Sloppy')':</label></text>
+    <comboboxtext width-request="121" tooltip-text=" '$(gettext 'Click: La ventana activa se selecciona haciendo clic con el mouse.
+ Sloppy: Coloque el cursor sobre la ventana para seleccionar.')' '$FOCUS_TITLE_TOOLTIP' ">
+     <variable>FOCUS_MODEL</variable>
+     <default>'`echo $FOCUS_MODEL`'</default>
+     <item>click</item>
+     <item>sloppy</item>
+     '$FOCUS_TITLE_ITEMS'
+    </comboboxtext>
+   </hbox>
+   </vbox>
+
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+
+   <vbox space-expand="true" space-fill="true">
+   <hbox space-expand="false" space-fill="false">
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Snap')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+    <text><label>'$(gettext 'Ninguno')' • '$(gettext 'Pantalla')' • '$(gettext 'Borde')':</label></text>
+    <comboboxtext width-request="121" tooltip-text=" '$(gettext 'Pantalla: Arrastre la ventana y ajústela al borde de la pantalla.
+ Borde: Ajuste a los bordes de la pantalla y de la ventana.')' ">
+     <variable>SNAP_MODE</variable>
+     <default>'`echo $SNAP_MODE`'</default>
+     <item>ninguno</item>
+     <item>pantalla</item>
+     <item>borde</item>
+    </comboboxtext>
+   </hbox>
+   <hbox>
+    <text><label>'$(gettext 'Snap tolerancia')':</label></text>
+    <spinbutton editable="false" width-request="121" range-min="1" range-max="32" range-step="1" range-value="5" tooltip-text=" '$(gettext 'Distancia de ajuste al borde de la pantalla o
+  borde de la ventana.Rango:1-32px  Predeterminado:5')' ">
+      <variable>SNAP_DISTANCE</variable>
+      <input>echo '$SNAP_DISTANCE'</input>
+    </spinbutton>
+   </hbox>
+    '$AERO_SNAP'
+   </vbox>
+
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+
+   <vbox space-expand="true" space-fill="true">
+   <hbox space-expand="false" space-fill="false">
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Mover')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+    <text><label>'$(gettext 'Contorno')' • '$(gettext 'Opaco')':</label></text>
+    <comboboxtext width-request="121" tooltip-text=" '$(gettext 'mostrar solo contorno o la ventana opaca al moverla')' ">
+     <variable>MOVE_MODE</variable>
+     <default>'`echo $MOVE_MODE`'</default>
+     <item>contorno</item>
+     <item>opaco</item>
+    </comboboxtext>
+   </hbox>
+   <hbox space-expand="false" space-fill="false">
+    <text><label>'$(gettext 'Cordenadas')':</label></text>
+    <comboboxtext width-request="121" tooltip-text=" '$(gettext 'Mostrar ubicación de la ventana estando en movimiento')' ">
+     <variable>MOVE_MODE_COORDINATES</variable>
+     <default>'`echo $MOVE_MODE_COORDINATES`'</default>
+     <item>ninguna</item>
+     <item>esquina</item>
+     <item>ventana</item>
+     <item>pantalla</item>
+    </comboboxtext>
+   </hbox>
+   </vbox>
+
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+
+   <vbox space-expand="true" space-fill="true">
+   <hbox space-expand="false" space-fill="false">
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext 'Redimensionar')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+    <text><label>'$(gettext 'Contorno')' • '$(gettext 'Opaco')':</label></text>
+    <comboboxtext width-request="121" tooltip-text=" '$(gettext 'Mostrar solo contorno o la ventana opaca al cambiar el tamaño')' ">
+     <variable>RESIZE_MODE</variable>
+     <default>'`echo $RESIZE_MODE`'</default>
+     <item>contorno</item>
+     <item>opaco</item>
+    </comboboxtext>
+   </hbox>
+   <hbox space-expand="false" space-fill="false">
+    <text><label>'$(gettext 'Cordenadas')':</label></text>
+    <comboboxtext width-request="121" tooltip-text=" '$(gettext 'Mostrar ubicación de la ventana cambiando de tamaño')' ">
+     <variable>RESIZE_MODE_COORDINATES</variable>
+     <default>'`echo $RESIZE_MODE_COORDINATES`'</default>
+     <item>ninguna</item>
+     <item>esquina</item>
+     <item>ventana</item>
+     <item>pantalla</item>
+    </comboboxtext>
+   </hbox>
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+   </vbox>
+  </vbox>
+
+
+
+  <vbox space-expand="true" space-fill="true">
+   <text use-markup="true"><label>"<b><span size='"'medium'"'>'$(gettext 'Atributos')''$attributes_tray'</span></b>"</label></text>
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+   <vbox>
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Geometria')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+   <hbox>
+   <vbox space-expand="true" space-fill="true">
+    <pixmap tooltip-text=" '$(gettext 'Ubicación del ')''$current_tray' ">
+     <variable>TRAYPLACEMENT</variable>
+     <input file>'$PIXMAPSDIR'/tray_placement.svg</input>
+     <height>64</height><width>64</width>
+    </pixmap>
+   </vbox>
+    <text width-request="80"><label>""</label></text>
+   <vbox>
+   <hbox>
+    <text><label>'$(gettext 'Horizontal')' • '$(gettext 'Vertical')':</label></text>
+    <comboboxtext width-request="121" tooltip-text=" '$(gettext 'Orientación del panel en pantalla')' ">
+     <variable>TRAY_LAYOUT</variable>
+     <default>'`echo $TRAY_LAYOUT`'</default>
+     <item>horizontal</item>
+     <item>vertical</item>
+    </comboboxtext>
+   </hbox>
+   <hbox>
+    <text><label>'$(gettext 'Panel')' » '$(gettext 'Ubicación')':</label></text>
+    <comboboxtext width-request="121" tooltip-text=" '$(gettext 'Alineación vertical del panel en la pantalla')' ">
+     <variable>VALIGN</variable>
+     <default>'`echo $VALIGN`'</default>
+     <item>arriba</item>
+     <item>centro</item>
+     <item>abajo</item>
+    </comboboxtext>
+   </hbox>
+   <hbox>
+    <text><label>'$(gettext 'Izquierda')' » '$(gettext 'Derecha')':</label></text>
+    <comboboxtext width-request="121" tooltip-text=" '$(gettext 'Alineación horizontal del panel en la pantalla')' ">
+     <variable>HALIGN</variable>
+     <default>'`echo $HALIGN`'</default>
+     <item>izquierda</item>
+     <item>centro</item>
+     <item>derecha</item>
+    </comboboxtext>
+   </hbox>
+   <hbox>
+    <text><label>'$(gettext 'Encima')' • '$(gettext 'Oculto')':</label></text>
+    <comboboxtext sensitive="'$LSTATE'" width-request="121" tooltip-text=" '$(gettext 'Visibilidad del panel en relación con las ventanas del escritorio')' ">
+     <variable>TRAY_LAYER</variable>
+     <default>'`echo $TRAY_LAYER`'</default>
+     <item>encima</item>
+     <item>oculto</item>
+    </comboboxtext>
+   </hbox>
+   <hbox>
+    <text><label>'$(gettext 'Tamaño del panel')':</label></text>
+    <spinbutton editable="false" width-request="121" range-min="20" range-max="64" range-step="1" range-value="28" tooltip-text=" '$(gettext 'Establezca el tamaño del panel. Esta es el
+  la altura del panel en horizontal o el ancho del panel en vertical. 
+ Rango soportado: 20-64px    Predeterminado: 28')' ">
+      <variable>TRAY_HEIGHT</variable>
+      <input>echo '$TRAY_HEIGHT'</input>
+    </spinbutton>
+   </hbox>
+   </vbox>
+   </hbox>
+   </vbox>
+
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+
+   <vbox>
+   <hbox>
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Auto-ocultar')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+    '$HYBRID'
+    <radiobutton tooltip-text=" '$(gettext 'Ocultar el panel fuera de la pantalla a menos que pase el mouse')' ">
+      <label>'$(gettext 'Actidado')'</label>
+      <variable>AUTOHIDE_NORMAL</variable>
+      <default>'`echo $AUTOHIDE_NORMAL`'</default>
+      <action>if true disable:TRAY_LAYER</action>
+    </radiobutton>
+    <radiobutton tooltip-text=" '$(gettext 'No esconder el panel')' ">
+      <label>'$(gettext 'Desactivado')'</label>
+      <variable>AUTOHIDE_DISABLE</variable>
+      <default>'`echo $AUTOHIDE_DISABLE`'</default>
+      <action>if true enable:TRAY_LAYER</action>
+    </radiobutton>
+   </hbox>
+   </vbox>
+
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+   <hseparator></hseparator>
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+   <text use-markup="true"><label>"<b><span size='"'medium'"'>'$(gettext 'Widgets')''$widget_tray'</span></b>"</label></text>
+   <pixmap><input file>'$ICONDIR'/blank1.png</input></pixmap>
+
+   '$DTP'
+
+   <vbox>
+   <hbox>
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Barra de tareas')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+    <text><label>'$(gettext 'Anchura maxima')':</label></text>
+    <spinbutton editable="false" width-request="121" range-min="0" range-max="250" range-step="1" range-value="200" tooltip-text=" '$(gettext 'Establezca el ancho máximo de píxeles de las ventanas iconificadas de la barra de tareas.
+  Esto se aplica solo a las bandejas en orientación horizontal. 
+ tamaño predeterminado=200   Sin maximo=0   Iconos unicamente=25')' ">
+      <variable>TASKBAR_WIDTH</variable>
+      <input>echo '$TASKBAR_WIDTH'</input>
+    </spinbutton>
+   </hbox>
+   </vbox>
+
+   '$DOCK'
+
+   '$MSC'
+
+   <vbox>
+    <text xalign="0" use-markup="true"><label>"<b><span size='"'small'"'>'$(gettext ' Reloj')'</span></b>"</label></text>
+    <button space-expand="true" space-fill="true" visible="false"><label>" "</label></button>
+   <hbox space-expand="false" space-fill="false" homogeneous="true">
+    '$CLOCKFORMAT'
+   </hbox>
+   </vbox>
+   <pixmap space-expand="false" space-fill="false"><input file>'$ICONDIR'/blank1.png</input></pixmap>
+  </vbox>
+
+
+
+  <vbox space-expand="false" space-fill="false">
+  <frame '$(gettext 'Aplicationes disponibles')'>
+  <hbox height-request="166" space-expand="true" space-fill="true">
+  <vbox space-expand="true" space-fill="true">
+   <tree hover-selection="true" enable-search="false" headers-visible="false" tooltip-text=" '$(gettext "click izquierdo para añadir al $current_tray")' ">
+    <variable>NEWBUTTON</variable>	
+    <input>cat /tmp/button_menu</input>
+    <action signal="button-release-event">echo $NEWBUTTON > /tmp/traybutton_new</action>
+    <action signal="button-release-event">button_add</action>
+    <action signal="button-release-event">currentbuttons</action>
+    <action signal="button-release-event">refresh:CURRENTBUTTONS</action>
+   </tree>
+  </vbox>
+    <vseparator></vseparator>
+  <vbox homogeneous="true" space-expand="false" space-fill="false">
+  <vbox homogeneous="true" space-expand="false" space-fill="false">
+   <button height-request="38" width-request="38" tooltip-text=" '$(gettext 'Gestionar aplicaciones disponibles')' ">
+    <input file>'$ICONDIR'/manage.svg</input><height>27</height><width>27</width>
+    '$MENUMANAGER_EXE'
+   </button>
+   <togglebutton height-request="38" width-request="38" tooltip-text=" '$(gettext 'Alternar (+) para incluir aplicaciones del menú deshabilitadas')' ">
+    <variable>SHOWHIDDEN</variable>
+    <input file>'$TMPDIR'/show.png</input>
+    <action>if true ln -sf '$TMPDIR'/showhiddenyes.png '$TMPDIR'/show.png</action>
+    <action>if true getallapps</action>
+    <action>if false ln -sf '$TMPDIR'/showhiddenno.png '$TMPDIR'/show.png</action>
+    <action>if false getapps</action>
+    <action>refresh:SHOWHIDDEN</action>
+    <action>refresh:NEWBUTTON</action>
+   </togglebutton>
+  </vbox>
+  </vbox>
+  </hbox>
+  </frame>
+
+  <vbox space-expand="true" space-fill="true">
+  <frame '$(gettext 'Botones del panel')'>
+  <hbox space-expand="true" space-fill="true">
+  <vbox space-expand="true" space-fill="true">
+   <tree has-focus="true" headers_visible="true" headers-clickable="false" exported_column="2" enable-search="false">
+    <height>245</height>
+    <variable>CURRENTBUTTONS</variable>
+    <label>'$(gettext "Botones $main_tray                                                                                     |Iconos|Ejecutar")'</label>
+    <input icon_column="0">cat /tmp/jwm_cur_btns</input>
+    <action signal="button-release-event">echo $CURRENTBUTTONS > /tmp/traybutton_selected</action>
+    <action signal="button-release-event">enable:BUTTON_REMOVE</action>
+    <action signal="button-release-event">enable:BUTTON_MOVEUP</action>
+    <action signal="button-release-event">enable:BUTTON_MOVEDOWN</action>
+   </tree>
+  </vbox>
+    <vseparator></vseparator>
+  <vbox homogeneous="true" space-expand="false" space-fill="false">
+  <vbox homogeneous="true" space-expand="false" space-fill="false">
+   <pixmap tooltip-text=" '$(gettext 'Ubicación del ')''$current_tray' ">
+    <variable>TRAYPLACEMENT2</variable>
+    <input file>'$PIXMAPSDIR'/tray_placement.svg</input>
+    <height>37</height><width>37</width>
+   </pixmap>
+   <button height-request="38" width-request="38" tooltip-text=" '$(gettext "Ver la configuración del $current_tray")' ">
+    <input file>'$ICONDIR'/view.svg</input><height>27</height><width>27</width>
+    <action>cat $JWM_HOME/$jwmtray | sed "s%	%  %g" | Xdialog --fixed-font --title "$JWM_HOME/$jwmtray" --no-cancel --textbox "-" 32 110 &</action>
+   </button>
+   <button height-request="38" width-request="38" sensitive="false" tooltip-text=" '$(gettext 'Eliminar el botón seleccionado de la lista del lanzador')' ">
+     <input file stock="gtk-remove"></input>
+    <variable>BUTTON_REMOVE</variable>
+    <action signal="button-release-event">button_delete</action>
+    <action signal="button-release-event">currentbuttons</action>
+    <action signal="button-release-event">refresh:CURRENTBUTTONS</action>
+    <action signal="button-release-event">refresh:NEWBUTTON</action>
+   </button>
+   <button height-request="38" width-request="38" sensitive="false" tooltip-text=" '$(gettext 'Mover el botón seleccionado hacia arriba en la lista del lanzador')' ">
+     <input file stock="gtk-go-up"></input>
+    <variable>BUTTON_MOVEUP</variable>
+    <action signal="button-release-event">button_moveup</action>
+    <action signal="button-release-event">currentbuttons</action>
+    <action signal="button-release-event">refresh:CURRENTBUTTONS</action>
+   </button>
+   <button height-request="38" width-request="38" sensitive="false" tooltip-text=" '$(gettext 'Mover el botón seleccionado hacia abajo en la lista del lanzador')' ">
+     <input file stock="gtk-go-down"></input>
+    <variable>BUTTON_MOVEDOWN</variable>
+    <action signal="button-release-event">button_movedown</action>
+    <action signal="button-release-event">currentbuttons</action>
+    <action signal="button-release-event">refresh:CURRENTBUTTONS</action>
+   </button>
+  </vbox>
+  </vbox>
+  </hbox>
+  </frame>
+  </vbox>
+  </vbox>
+
+
+
+  '$OPTIONS'
+
+
+
+  <vbox margin="5">
+   <text height-request="10"><label>""</label></text>
+   <text use-markup="true"><label>"<b><big>'$(gettext 'Perfiles actuales')'</big></b>"</label></text>
+
+   <hbox homogeneous="true" space-expand="true" space-fill="true">
+   <vbox space-expand="true" space-fill="true">
+   <text use-markup="true"><label>"<b>'$(gettext 'jwmrc-personal')'</b>"</label></text>
+    <button image-position="2" height-request="80" width-request="150" tooltip-text=" '$(gettext 'Ver la configuración personal actual de JWM')' ">
+    <label>'$(gettext 'Ver actual')'</label>
+     <input file>'$ICONDIR'/view.svg</input><height>36</height><width>36</width>
+     <action>cat $HOME/.jwm/jwmrc-personal | Xdialog --fixed-font --title "$HOME/.jwm/jwmrc-personal" --no-cancel --textbox "-" 32 110 &</action>
+    </button>
+   </vbox>
+   <vbox space-expand="true" space-fill="true">
+   <text use-markup="true"><label>"<b>'$profile_tray'</b>"</label></text>
+    <button image-position="2" height-request="80" width-request="150" tooltip-text=" '$(gettext 'Ver la configuración personal actual de JWM')' ">
+    <label>'$(gettext 'Ver actual')'</label>
+     <input file>'$ICONDIR'/view.svg</input><height>36</height><width>36</width>
+     <action>cat $JWM_HOME/$jwmtray | sed "s%	%  %g" | Xdialog --fixed-font --title "$JWM_HOME/$jwmtray" --no-cancel --textbox "-" 32 110 &</action>
+    </button>
+   </vbox>
+   </hbox>
+
+   <hbox homogeneous="true" space-expand="true" space-fill="true">
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="80" width-request="150" tooltip-text=" '$(gettext 'Editar la configuración actual de JWM')' ">
+    <label>'$(gettext 'Editar actual')'</label>
+     <input file>'$ICONDIR'/edit.svg</input><height>36</height><width>36</width>
+     <action>defaulttexteditor $HOME/.jwm/jwmrc-personal &</action>
+    </button>
+   </vbox>
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="80" width-request="150" tooltip-text=" '$(gettext 'Editar la configuración actual de JWM')' ">
+    <label>'$(gettext 'Editar actual')'</label>
+     <input file>'$ICONDIR'/edit.svg</input><height>36</height><width>36</width>
+     <action>defaulttexteditor $JWM_HOME/$jwmtray &</action>
+    </button>
+   </vbox>
+   </hbox>
+
+    <text use-markup="true"><label>"<b><big>'$(gettext 'Bacup de Perfiles')'</big></b>"</label></text>
+
+   <hbox homogeneous="true" space-expand="true" space-fill="true">
+   <vbox space-expand="true" space-fill="true">
+   <text use-markup="true"><label>"<b>'$(gettext 'jwmrc-personal')'</b>"</label></text>
+    <button image-position="2" height-request="80" width-request="150" tooltip-text=" '$(gettext 'Guardar '$HOME'/.jwm/jwmrc-personal')' ">
+    <label>'$(gettext 'Guardar')'</label>
+     <input file>'$ICONDIR'/save.svg</input><height>36</height><width>36</width>
+     <action>savejwmrc_personal</action>
+    </button>
+   </vbox>
+   <vbox space-expand="true" space-fill="true">
+   <text use-markup="true"><label>"<b>'$profile_tray'</b>"</label></text>
+    <button image-position="2" height-request="80" width-request="150" tooltip-text=" '$(gettext 'Guardar '$JWM_HOME'/'$jwmtray'')' ">
+    <label>'$(gettext 'Guardar')'</label>
+     <input file>'$ICONDIR'/save.svg</input><height>36</height><width>36</width>
+     <action>savejwmrc_tray</action>
+    </button>
+   </vbox>
+   </hbox>
+
+   <hbox homogeneous="true" space-expand="true" space-fill="true">
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="80" width-request="150" tooltip-text=" '$(gettext 'Restaurar '$HOME'/.jwm/jwmrc-personal')' ">
+    <label>'$(gettext 'Restaurar')'</label>
+     <input file>'$ICONDIR'/restore.svg</input><height>36</height><width>36</width>
+     <action>restorejwmrc_personal &</action>
+     <action>exit:quit_now</action>
+    </button>
+   </vbox>
+   <vbox space-expand="true" space-fill="true">
+    <button image-position="2" height-request="80" width-request="150" tooltip-text=" '$(gettext 'Restaurar '$JWM_HOME'/'$jwmtray'')' ">
+    <label>'$(gettext 'Restaurar')'</label>
+     <input file>'$ICONDIR'/restore.svg</input><height>36</height><width>36</width>
+     <action>restorejwmrc_tray &</action>
+     <action>exit:quit_now</action>
+    </button>
+   </vbox>
+   </hbox>
+   <text><label>" "</label></text>
+  </vbox>
+ </notebook>
+ </vbox>
+
+  <hbox homogeneous="true" space-expand="false" space-fill="true">
+   '$BUTTON1'
+   '$BUTTON2'
+   <button height-request="35">
+    <label>'$(gettext 'Ayuda')' </label>
+    <input file>'$ICONDIR'/help.svg</input><height>22</height><width>22</width>
+    <action>jwmdesk_help &</action>
+   </button>
+   <button height-request="35" tooltip-text=" '$(gettext 'Reiniciar JWM')' ">
+    <label>'$(gettext 'Aplicar')' </label>
+    <input file>'$ICONDIR'/apply.svg</input><height>22</height><width>22</width>
+    <action>window_new</action>
+    <action>tray_hybrid</action>
+    <action>tray_new</action>
+    <action>tray_format</action>
+    <action>tray_placement</action>
+    <action>refresh:TRAYPLACEMENT</action>
+    <action>refresh:TRAYPLACEMENT2</action>
+    <action>jwm -restart &</action>
+   </button>
+   <button height-request="35">
+    <label>'$(gettext 'Salir')'</label>
+    <input file>'$ICONDIR'/quit.svg</input><height>22</height><width>22</width>
+    <action>exit:quit_now</action>
+   </button>
+
+  </hbox>
+ </vbox>
+ <action signal="show">echo 100 > /tmp/jwmdesk-splash</action>
+</window>'
+
+$GTKDIALOG -p JWMDESK
+
+/usr/local/jwmdesk/treeicons #update gtkdialog path for treeicons
+
+unset JWMDESK
+
+exit 0
